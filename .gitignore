@@ -1,0 +1,17 @@
+# secrets — never commit
+.env
+.env.local
+.env.production
+
+# dependencies
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+
+# build output
+backend/dist/
+frontend/dist/
+
+# editor
+.DS_Store
+*.local
