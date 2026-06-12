@@ -7,6 +7,7 @@ import { generatePromptRouter } from "./routes/generatePrompt";
 import { parsePdfRouter } from "./routes/parsePdf";
 import { mockFlowRouter } from "./routes/mockFlow";
 import { getCostLog, clearCostLog } from "./costTracker";
+import { shareRouter } from "./routes/share";
 
 dotenv.config();
 
@@ -27,7 +28,7 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
     cb(new Error(`CORS: ${origin} not allowed`));
   },
-  methods: ["GET", "POST"],
+  methods: ["GET", "POST", "PUT"],
   allowedHeaders: ["Content-Type"],
 }));
 
@@ -66,6 +67,7 @@ app.use("/api/parse-pdf", uploadLimiter);
 app.use("/api", generatePromptRouter);
 app.use("/api", parsePdfRouter);
 app.use("/api", mockFlowRouter);
+app.use("/api/share", shareRouter);
 
 // ── Health check ─────────────────────────────────────────────────────────────
 app.get("/health", (_req, res) => res.json({ status: "ok" }));

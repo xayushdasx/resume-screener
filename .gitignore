@@ -15,3 +15,7 @@ frontend/dist/
 # editor
 .DS_Store
 *.local
+
+# runtime output
+matched_resume_links.csv
+*.csv

@@ -577,8 +577,8 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
 
   if (!eduPed.includes("no_preference") && eduPed.length > 0) {
     const parts: string[] = [];
-    if (eduPed.includes("tier_1")) parts.push(`Tier 1 colleges (${TIER1_COLLEGES})`);
-    if (eduPed.includes("tier_2")) parts.push(`Tier 2 colleges (${TIER2_COLLEGES})`);
+    if (eduPed.includes("tier_1")) parts.push(TIER1_COLLEGES);
+    if (eduPed.includes("tier_2")) parts.push(TIER2_COLLEGES);
     expandedCriteria.education_pedigree = `Hard requirement — candidate's EITHER bachelor's OR master's degree must be from one of the following institutions (having BOTH also qualifies): ${parts.join(" or ")}. Candidates whose bachelor's AND master's degrees are both NOT from any institution on this list must be rated Reject.`;
   } else {
     expandedCriteria.education_pedigree = "no_preference";
@@ -586,8 +586,8 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
 
   if (!compPed.includes("no_preference") && compPed.length > 0) {
     const parts: string[] = [];
-    if (compPed.includes("tier_1")) parts.push(`Tier 1 companies (${TIER1_COMPANIES})`);
-    if (compPed.includes("tier_2")) parts.push(`Tier 2 companies (${TIER2_COMPANIES})`);
+    if (compPed.includes("tier_1")) parts.push(TIER1_COMPANIES);
+    if (compPed.includes("tier_2")) parts.push(TIER2_COMPANIES);
     expandedCriteria.company_pedigree = `Hard requirement — candidate must have prior experience at: ${parts.join(" or ")}. Candidates without any experience at any of these companies must be rated Reject.`;
   } else {
     expandedCriteria.company_pedigree = "no_preference";

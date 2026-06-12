@@ -7,9 +7,18 @@ import {
   Pencil, ChevronDown, ChevronUp, Download, Users, ThumbsUp, ThumbsDown, Trash2,
   ArrowRight
 } from "lucide-react";
-import { generatePrompt, generateJd, uploadPdf, parseEvaluatorPrompt, recalibratePrompt, bulkScreenStream, buildEvaluatorFromCriteria, screenAndSampleStream, bulkEvalStream, dynamicTweakPrompt, compressEvalPrompt, checkCriteriaVagueness, generateClarifyingQuestions } from "./api";
+import { RolesList } from "./RolesList";
+import { RoleDetail } from "./RoleDetail";
+import { SendShortlistModal } from "./SendShortlistModal";
+import type { ShortlistEntry } from "./SendShortlistModal";
+import { CreateRole } from "./CreateRole";
+import type { ATSRole, ATSCandidate } from "./RolesList";
+import { generatePrompt, generateJd, uploadPdf, parseEvaluatorPrompt, recalibratePrompt, bulkScreenStream, buildEvaluatorFromCriteria, screenAndSampleStream, bulkEvalStream, dynamicTweakPrompt, compressEvalPrompt, checkCriteriaVagueness, generateClarifyingQuestions, createShare, getShare, updateShare, uploadShareFiles, getShareFileUrl } from "./api";
 import type { CompressedView } from "./api";
 import type { GeneratePromptResponse, TestResumeResponse } from "./types";
+import { idbSaveFile, idbGetFile } from "./idbFiles";
+
+type AppView = "roles" | "create-role" | "role-detail" | "screener";
 
 // ─── Progress bar hook ───────────────────────────────────────────────────────
 
@@ -1298,6 +1307,65 @@ function readCache(): Record<string, any> {
   catch { return {}; }
 }
 
+function ResumeModalOverlay({ url, result, onClose }: { url: string; result: any; onClose: () => void }) {
+  const rating: "P0" | "P1" | "Reject" = result?.rating;
+  const ratingConfig = {
+    P0: { bg: "bg-emerald-50", text: "text-emerald-700", label: "Strong Hire" },
+    P1: { bg: "bg-amber-50", text: "text-amber-700", label: "Possible Hire" },
+    Reject: { bg: "bg-red-50", text: "text-red-700", label: "Not a Fit" },
+  }[rating] ?? { bg: "bg-slate-50", text: "text-slate-600", label: "" };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="relative bg-white shadow-2xl overflow-hidden flex flex-col"
+        style={{ width: "min(900px, 94vw)", height: "92vh" }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-3 border-b border-neutral-200 flex-shrink-0 bg-white">
+          <div className="flex items-center gap-3">
+            <div className="w-7 h-7 bg-neutral-100 flex items-center justify-center flex-shrink-0">
+              <span className="text-xs font-bold text-neutral-600">{(result?.name ?? "?")[0]?.toUpperCase()}</span>
+            </div>
+            <span className="text-sm font-medium text-neutral-800">{result?.name ?? "Resume"}</span>
+          </div>
+          <button
+            onClick={onClose}
+            className="flex items-center gap-1.5 text-xs font-medium text-neutral-500 hover:text-neutral-900 border border-neutral-200 hover:border-neutral-400 px-3 py-1.5 transition-colors"
+          >
+            <X className="w-3.5 h-3.5" /> Close
+          </button>
+        </div>
+        {(rating || result?.reject_reason || result?.reasoning?.length || result?.concerns?.length) && (
+          <div className={`flex flex-wrap items-start gap-4 px-5 py-3 border-b border-neutral-100 flex-shrink-0 ${ratingConfig.bg}`}>
+            {rating && (
+              <div className={`flex items-center gap-2 ${ratingConfig.text}`}>
+                <span className="text-sm font-bold">{rating}</span>
+                {ratingConfig.label && <span className="text-xs font-medium opacity-70">— {ratingConfig.label}</span>}
+              </div>
+            )}
+            {result?.reject_reason && (
+              <span className="text-xs text-red-700 font-medium">✕ {result.reject_reason}</span>
+            )}
+            {(result?.reasoning ?? []).map((r: string, i: number) => (
+              <span key={i} className={`text-xs font-medium ${ratingConfig.text} opacity-80`}>· {r}</span>
+            ))}
+            {(result?.concerns ?? []).map((c: string, i: number) => (
+              <span key={i} className="text-xs text-amber-700 font-medium bg-amber-50 border border-amber-200 rounded px-2 py-0.5">! {c}</span>
+            ))}
+          </div>
+        )}
+        <PdfViewer url={url} className="flex-1 w-full" style={{ minHeight: 0 }} />
+      </div>
+    </div>
+  );
+}
+
+function readRoles(): ATSRole[] {
+  try { return JSON.parse(localStorage.getItem("rs:roles") ?? "null") ?? []; }
+  catch { return []; }
+}
+
 export default function App() {
   const cache = useMemo(readCache, []); // read once on mount, never again
 
@@ -1307,7 +1375,7 @@ export default function App() {
   const [jd, setJd] = useState("");
   const [roleOverride, setRoleOverride] = useState("");
   const [generating, setGenerating] = useState(false);
-  const [paramsData, setParamsData] = useState<GeneratePromptResponse | null>(cache.paramsData ?? null);
+  const [paramsData, setParamsData] = useState<GeneratePromptResponse | null>(null);
   const [genError, setGenError] = useState<string | null>(null);
   const prevJd = useRef("");
 
@@ -1347,8 +1415,49 @@ export default function App() {
   const [bulkResumes, setBulkResumes] = useState<{file: File, name: string}[]>([]);
   const [resumeModal, setResumeModal] = useState<{ url: string; result: any } | null>(null);
 
-  const openResumeModal = (filename: string, result: any) => {
-    const file = bulkResumes.find(r => r.name === filename)?.file;
+  // Accumulates ALL uploaded File objects across every screening run in this session.
+  // React state (bulkResumes / tasteResumes) gets replaced each run, so files from
+  // earlier runs would otherwise disappear. This ref keeps them all.
+  const allFilesRef = useRef<Map<string, File>>(new Map());
+
+  // Files queued from RoleDetail "Upload more" — picked up by useEffect when step 3 renders.
+  const pendingUploadRef = useRef<File[] | null>(null);
+
+  // Save a file to both in-memory ref and IndexedDB (persists across page refreshes).
+  const registerFile = (name: string, file: File) => {
+    allFilesRef.current.set(name, file);
+    idbSaveFile(name, file);
+  };
+
+  const findResumeFile = async (filename: string, shareToken?: string): Promise<File | null> => {
+    const mem = allFilesRef.current.get(filename)
+      ?? bulkResumes.find(r => r.name === filename)?.file
+      ?? tasteResumes.find(r => r.name === filename)?.file;
+    if (mem) return mem;
+    const fromIdb = await idbGetFile(filename);
+    if (fromIdb) {
+      allFilesRef.current.set(filename, fromIdb);
+      return fromIdb;
+    }
+    // Last resort: fetch from backend share store
+    if (shareToken) {
+      try {
+        const url = getShareFileUrl(shareToken, filename);
+        const response = await fetch(url);
+        if (response.ok) {
+          const blob = await response.blob();
+          const file = new File([blob], filename, { type: blob.type || "application/pdf" });
+          allFilesRef.current.set(filename, file);
+          idbSaveFile(filename, file);
+          return file;
+        }
+      } catch {}
+    }
+    return null;
+  };
+
+  const openResumeModal = async (filename: string, result: any) => {
+    const file = await findResumeFile(filename);
     if (!file) return;
     const url = URL.createObjectURL(file);
     setResumeModal({ url, result });
@@ -1404,21 +1513,95 @@ export default function App() {
   const [prevCompressedView, setPrevCompressedView] = useState<CompressedView | null>(null);
   const [compressingView, setCompressingView] = useState(false);
 
+  // ── ATS wrapper state ──────────────────────────────────────────────────────
+  const [appView, setAppView] = useState<AppView>("roles");
+  const [activeRoleId, setActiveRoleId] = useState<string | null>(null);
+  const [roles, setRoles] = useState<ATSRole[]>(() => readRoles());
+  const [showShortlistModal, setShowShortlistModal] = useState(false);
+  const shortlistSentRef = useRef(false);
+
   const paramsDataRef = useRef(paramsData);
   useEffect(() => { paramsDataRef.current = paramsData; }, [paramsData]);
 
-  // ── Persist core state to localStorage on every change ────────────────────
+  // ── Shared role: load from backend when /role/[token] is in URL ─────────────
+  useEffect(() => {
+    const match = window.location.pathname.match(/^\/role\/([^/]+)$/);
+    const shareToken = match ? match[1] : null;
+    if (!shareToken) return;
+    getShare(shareToken).then(({ role }) => {
+      const sharedRole: ATSRole = { ...role, shareToken };
+      setRoles(prev => {
+        // Replace if already present (re-visit), otherwise prepend
+        const exists = prev.some(r => r.shareToken === shareToken);
+        return exists ? prev.map(r => r.shareToken === shareToken ? sharedRole : r) : [sharedRole, ...prev];
+      });
+      setActiveRoleId(sharedRole.id);
+      setAppView("role-detail");
+    }).catch(() => {
+      alert("This share link has expired or is no longer available.");
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Auto-start screening when navigating to step 3 with pending files from RoleDetail.
+  useEffect(() => {
+    if (step === 3 && appView === "screener" && pendingUploadRef.current && paramsData) {
+      const files = pendingUploadRef.current;
+      pendingUploadRef.current = null;
+      screenFiles(files);
+    }
+  }, [step, appView, paramsData]); // paramsData in deps: fires when restored from role
+
+  // ── Persist params + all screener UI state on the role so everything survives forever ──
+  // ONLY save while inside the screener — prevents new roles inheriting stale params from a previous session
+  useEffect(() => {
+    if (paramsData && activeRoleId && appView === "screener") {
+      setRoles(prev => prev.map(r =>
+        r.id === activeRoleId ? {
+          ...r,
+          params: paramsData,
+          screenerState: {
+            jd,
+            describeRole,
+            describeStatement,
+            generatedJd,
+            criteria,
+            criteriaApplied,
+            compressedView,
+            originalEvaluatorPrompt,
+          },
+        } : r
+      ));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paramsData, activeRoleId, appView]);
+
+  // ── Mark taste calibration done on the role when completed ────────────────
+  useEffect(() => {
+    if (calibrationComplete && activeRoleId && appView === "screener") {
+      setRoles(prev => prev.map(r =>
+        r.id === activeRoleId ? { ...r, tasteCalibrated: true } : r
+      ));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calibrationComplete, activeRoleId, appView]);
+
+  // ── Persist session UI state (paramsData lives on role.params, not here) ──────
   useEffect(() => {
     try {
       localStorage.setItem("rs:state", JSON.stringify({
-        paramsData,
         criteria,
         criteriaApplied,
         compressedView,
         originalEvaluatorPrompt,
       }));
     } catch {}
-  }, [paramsData, criteria, criteriaApplied, compressedView, originalEvaluatorPrompt]);
+  }, [criteria, criteriaApplied, compressedView, originalEvaluatorPrompt]);
+
+  useEffect(() => {
+    try { localStorage.setItem("rs:roles", JSON.stringify(roles)); }
+    catch {}
+  }, [roles]);
 
   const batchEndTriggeredRef = useRef(false);
 
@@ -1758,7 +1941,9 @@ export default function App() {
     const files = Array.from(e.target.files);
     e.target.value = "";
 
-    setTasteResumes(files.map(f => ({ file: f, name: f.name })));
+    const tasteList = files.map(f => ({ file: f, name: f.name }));
+    tasteList.forEach(r => registerFile(r.name, r.file));
+    setTasteResumes(tasteList);
     setTasteResults([]);
     setParsedResumes([]);
     setCurrentBatchFilenames([]);
@@ -1882,6 +2067,7 @@ export default function App() {
     if (!paramsDataRef.current || parsedResumes.length === 0) return;
     const currentParams = paramsDataRef.current;
     setStep(3);
+    tasteResumes.forEach(r => registerFile(r.name, r.file));
     setBulkResumes(tasteResumes); // make files available for the viewer
     setScreening(true);
     setBulkResults([]);
@@ -1908,14 +2094,22 @@ export default function App() {
     }
   };
 
-  const handleBulkUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0 || !paramsData) return;
-    const files = Array.from(e.target.files);
-    e.target.value = "";
-    setBulkResumes(files.map(f => ({ file: f, name: f.name }))); // store for viewer
+  // Core screening function — shared by the upload zone and the RoleDetail "add more" flow.
+  const screenFiles = async (inputFiles: File[]) => {
+    if (!paramsData) return;
+    // Skip files already screened in this run
+    const alreadyScreened = new Set(bulkResults.map((r: any) => r.filename));
+    const files = inputFiles.filter(f => !alreadyScreened.has(f.name));
+    if (files.length === 0) return;
+
+    const resumeList = files.map(f => ({ file: f, name: f.name }));
+    resumeList.forEach(r => registerFile(r.name, r.file));
+    setBulkResumes(resumeList);
     setScreening(true);
-    setBulkResults([]);
-    setManualRatingOverrides({});
+    if (bulkResults.length === 0) {
+      setBulkResults([]);
+      setManualRatingOverrides({});
+    }
     setBulkParseErrorCount(0);
     setBulkUploadTotal(files.length);
     setBulkProgress({ phase: "Parsing PDFs", done: 0, total: files.length });
@@ -1936,13 +2130,9 @@ export default function App() {
             return null;
           }
         }));
-        for (const r of results) {
-          if (r) parsedResumes.push(r);
-        }
+        for (const r of results) { if (r) parsedResumes.push(r); }
         setBulkProgress({
-          phase: failedFiles.length > 0
-            ? `Parsing… ${parsedResumes.length} ok, ${failedFiles.length} failed`
-            : `Parsing resumes…`,
+          phase: failedFiles.length > 0 ? `Parsing… ${parsedResumes.length} ok, ${failedFiles.length} failed` : `Parsing resumes…`,
           done: parsedResumes.length + failedFiles.length,
           total: files.length,
         });
@@ -1955,7 +2145,6 @@ export default function App() {
       if (failedFiles.length > 0) {
         setBulkParseErrorCount(failedFiles.length);
         setBulkParseFailedNames(failedFiles);
-        console.warn(`[bulk] ${failedFiles.length} file(s) failed to parse:`, failedFiles);
       } else {
         setBulkParseFailedNames([]);
       }
@@ -1969,10 +2158,6 @@ export default function App() {
           setBulkProgress(prev => prev ? { ...prev, done: event.completed, total: event.total } : prev);
         }
       }
-
-      if (failedFiles.length > 0) {
-        console.info(`[bulk] Screening complete. ${parsedResumes.length} evaluated, ${failedFiles.length} could not be parsed.`);
-      }
     } catch (err: any) {
       console.error(err);
       alert(`Bulk screening failed: ${err.message}`);
@@ -1980,6 +2165,13 @@ export default function App() {
       setScreening(false);
       setBulkProgress(null);
     }
+  };
+
+  const handleBulkUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0 || !paramsData) return;
+    const files = Array.from(e.target.files);
+    e.target.value = "";
+    await screenFiles(files);
   };
 
   const effectiveRating = (r: any): string => manualRatingOverrides[r.filename] ?? r.rating;
@@ -2011,14 +2203,338 @@ export default function App() {
     link.remove();
   };
 
+  // Build a candidate record from a raw bulk result
+  const buildCandidate = (r: any, status: ATSCandidate["status"], overrideTier?: string): ATSCandidate => {
+    const sig = (r.signal_json as any) ?? {};
+    const latestWork = Array.isArray(sig.work_history) && sig.work_history.length > 0 ? sig.work_history[0] : null;
+    const totalMonths: number | null = sig.total_experience_months ?? null;
+    return {
+      filename: r.filename,
+      name: r.name ?? r.filename,
+      email: r.email ?? null,
+      phone: r.phone ?? null,
+      aiRating: r.rating ?? "Error",
+      finalRating: overrideTier ?? (manualRatingOverrides[r.filename] ?? r.rating) as string,
+      status,
+      reason: r.reject_reason ?? (r.reasoning ?? [])[0] ?? null,
+      reasoning: r.reasoning ?? [],
+      concerns: r.concerns ?? [],
+      collegeName: r.college_name ?? sig.college_name ?? null,
+      collegeTier: r.college_tier ?? sig.college_tier ?? null,
+      currentRole: latestWork?.role ?? null,
+      currentCompany: latestWork?.company ?? null,
+      yearsExperience: totalMonths != null ? Math.round(totalMonths / 12 * 10) / 10 : null,
+      runAt: new Date().toISOString(),
+    };
+  };
 
+  // Save any unprocessed bulkResults to the active role as "new" (called on navigate away)
+  const savePoolToRole = (targetRoleId: string) => {
+    if (bulkResults.length === 0) return;
+    setRoles(prev => {
+      const updated = prev.map(role => {
+        if (role.id !== targetRoleId) return role;
+        const existingFns = new Set(role.candidates.map(c => c.filename));
+        const toAdd = bulkResults
+          .filter(r => !existingFns.has(r.filename))
+          .map(r => buildCandidate(r, "new"));
+        return toAdd.length ? { ...role, candidates: [...role.candidates, ...toAdd] } : role;
+      });
+      const updatedRole = updated.find(r => r.id === targetRoleId);
+      if (updatedRole) {
+        syncRoleToShare(updatedRole);
+        if (updatedRole.shareToken) {
+          const newFiles = bulkResumes.map(r => r.file).filter(Boolean);
+          if (newFiles.length > 0) uploadFilesToShare(newFiles, updatedRole.shareToken);
+        }
+      }
+      return updated;
+    });
+  };
+
+  const handleShortlistConfirm = (shortlisted: ShortlistEntry[], rejectedFns: string[], savedFns: string[]) => {
+    shortlistSentRef.current = true;
+    setShowShortlistModal(false);
+
+    const tierMap = Object.fromEntries(shortlisted.map(s => [s.filename, s.tier]));
+
+    const buildWithStatus = (r: any): ATSCandidate => {
+      if (tierMap[r.filename]) return buildCandidate(r, "shortlisted", tierMap[r.filename]);
+      if (savedFns.includes(r.filename)) return buildCandidate(r, "saved");
+      if (rejectedFns.includes(r.filename)) return buildCandidate(r, "rejected");
+      return buildCandidate(r, "new");
+    };
+
+    if (activeRoleId) {
+      setRoles(prev => {
+        const updated = prev.map(role => {
+          if (role.id !== activeRoleId) return role;
+          const existingFns = new Set(role.candidates.map(c => c.filename));
+          const bulkFns = new Set(bulkResults.map(r => r.filename));
+          const updatedCandidates = role.candidates.map(c =>
+            bulkFns.has(c.filename) ? buildWithStatus(bulkResults.find(r => r.filename === c.filename)!) : c
+          );
+          const toAdd = bulkResults
+            .filter(r => !existingFns.has(r.filename))
+            .map(buildWithStatus);
+          return { ...role, candidates: [...updatedCandidates, ...toAdd] };
+        });
+        const updatedRole = updated.find(r => r.id === activeRoleId);
+        if (updatedRole) {
+          syncRoleToShare(updatedRole);
+          // Upload any newly screened files to the share store
+          if (updatedRole.shareToken) {
+            const newFiles = bulkResumes.map(r => r.file).filter(Boolean);
+            if (newFiles.length > 0) uploadFilesToShare(newFiles, updatedRole.shareToken);
+          }
+        }
+        return updated;
+      });
+    }
+    setAppView("role-detail");
+  };
+
+  const handleDeleteRole = (roleId: string) => {
+    setRoles(prev => prev.filter(r => r.id !== roleId));
+    if (activeRoleId === roleId) setActiveRoleId(null);
+    setAppView("roles");
+  };
+
+  const handleUpdateCandidateStatus = (roleId: string, filename: string, status: ATSCandidate["status"]) => {
+    setRoles(prev => {
+      const updated = prev.map(role =>
+        role.id !== roleId ? role :
+        { ...role, candidates: role.candidates.map(c => c.filename === filename ? { ...c, status } : c) }
+      );
+      const updatedRole = updated.find(r => r.id === roleId);
+      if (updatedRole) syncRoleToShare(updatedRole);
+      return updated;
+    });
+  };
+
+  const handleBulkUpdateStatus = (roleId: string, filenames: string[], status: ATSCandidate["status"]) => {
+    const set = new Set(filenames);
+    setRoles(prev => {
+      const updated = prev.map(role =>
+        role.id !== roleId ? role :
+        { ...role, candidates: role.candidates.map(c => set.has(c.filename) ? { ...c, status } : c) }
+      );
+      const updatedRole = updated.find(r => r.id === roleId);
+      if (updatedRole) syncRoleToShare(updatedRole);
+      return updated;
+    });
+  };
+
+  // Reset ALL screener state so a new role gets a completely fresh session
+  const resetScreenerState = () => {
+    setStep(1);
+    setJd("");
+    setRoleOverride("");
+    setGenerating(false);
+    setParamsData(null);
+    setGenError(null);
+    setJdMode("describe");
+    setDescribeRole("");
+    setDescribeStatement("");
+    setGeneratedJd("");
+    setJdGenError(null);
+    setTasteResumes([]);
+    setTasteResults([]);
+    setParsedResumes([]);
+    setCurrentBatchFilenames([]);
+    setEvaluatedFilenames(new Set());
+    setTasteParseErrorCount(0);
+    setTasteParseFailedNames([]);
+    setEvaluatingTaste(false);
+    setTasteProgress(null);
+    setTastePoolCount(0);
+    setTasteCandidatePool([]);
+    setFeedback({});
+    setDisagreeStage({});
+    setRejectReasons({});
+    setReviewIndex(0);
+    setInlineRecalibrating(false);
+    setConsecutiveAgrees(0);
+    setCalibrationComplete(false);
+    setTasteIntroSeen(false);
+    setBulkResumes([]);
+    setBulkResults([]);
+    setScreening(false);
+    setBulkProgress(null);
+    setBulkParseErrorCount(0);
+    setBulkUploadTotal(0);
+    setBulkParseFailedNames([]);
+    setManualRatingOverrides({});
+    setOriginalEvaluatorPrompt(null);
+    setCriteria(null);
+    setCriteriaApplied({ p0: false, p1: false, dealbreakers: false });
+    setRoleQsDone(false);
+    setFieldVagueness({ p0: null, p1: null });
+    setClarifyingQuestions(null);
+    setClarifyingOpen(false);
+    setClarifyPendingCriteria(null);
+    setClarifyPendingField(null);
+    setClarifyingField(null);
+    setCompressedView(null);
+    setPrevCompressedView(null);
+    setCompressingView(false);
+    setShowShortlistModal(false);
+    shortlistSentRef.current = false;
+    try { localStorage.removeItem("rs:state"); } catch {}
+  };
+
+  // Restore all saved screener state from a role (called after resetScreenerState so last-write wins)
+  const restoreRoleScreenerState = (role: ATSRole) => {
+    if (role.params) setParamsData(role.params);
+    const ss = role.screenerState;
+    if (ss) {
+      if (ss.jd) setJd(ss.jd);
+      if (ss.describeRole) setDescribeRole(ss.describeRole);
+      if (ss.describeStatement) setDescribeStatement(ss.describeStatement);
+      if (ss.generatedJd) setGeneratedJd(ss.generatedJd);
+      if (ss.criteria) {
+        setCriteria(ss.criteria);
+        setRoleQsDone(ss.criteria.adjacent_roles_policy != null);
+      }
+      if (ss.criteriaApplied) setCriteriaApplied(ss.criteriaApplied);
+      if (ss.compressedView) setCompressedView(ss.compressedView);
+      if (ss.originalEvaluatorPrompt) setOriginalEvaluatorPrompt(ss.originalEvaluatorPrompt);
+    } else {
+      // First time opening screener for this role — pre-fill role name from the ATS role title
+      setDescribeRole(role.title);
+    }
+  };
+
+  // Helper: navigate away from screener, auto-save pool if not yet shortlisted
+  const leaveScreener = (dest: AppView) => {
+    if (bulkResults.length > 0 && activeRoleId && !shortlistSentRef.current) {
+      savePoolToRole(activeRoleId);
+    }
+    setAppView(dest);
+  };
+
+  // Helper: sync a role to the backend share store if it has a shareToken
+  const syncRoleToShare = (role: ATSRole) => {
+    if (!role.shareToken) return;
+    updateShare(role.shareToken, role).catch(() => {});
+  };
+
+  // Helper: upload files to the backend share store for the active role
+  const uploadFilesToShare = (files: File[], shareToken: string) => {
+    uploadShareFiles(shareToken, files).catch(() => {});
+  };
+
+  // ── ATS view guards — early return before the screener shell ──────────────
+  if (appView === "roles") {
+    return (
+      <RolesList
+        roles={roles}
+        onNewRole={() => setAppView("create-role")}
+        onOpenRole={id => { setActiveRoleId(id); setAppView("role-detail"); }}
+        onDeleteRole={handleDeleteRole}
+        onShareRole={async (roleId) => {
+          const role = roles.find(r => r.id === roleId)!;
+          if (role.shareToken) return `${window.location.origin}/role/${role.shareToken}`;
+          const { token } = await createShare(role);
+          setRoles(prev => prev.map(r => r.id === roleId ? { ...r, shareToken: token } : r));
+          return `${window.location.origin}/role/${token}`;
+        }}
+      />
+    );
+  }
+
+  if (appView === "create-role") {
+    return (
+      <CreateRole
+        onBack={() => setAppView("roles")}
+        onCreate={(title, department) => {
+          const newRole: ATSRole = {
+            id: `role_${Date.now()}`,
+            title,
+            department,
+            createdAt: new Date().toISOString(),
+            status: "active",
+            candidates: [],
+          };
+          setRoles(prev => [newRole, ...prev]);
+          setActiveRoleId(newRole.id);
+          setAppView("role-detail");
+        }}
+      />
+    );
+  }
+
+  if (appView === "role-detail") {
+    const activeRole = roles.find(r => r.id === activeRoleId) ?? null;
+    if (!activeRole) return null;
+    return (
+      <>
+        <RoleDetail
+          role={activeRole}
+          onBack={() => setAppView("roles")}
+          onNewShortlist={() => {
+            resetScreenerState();
+            restoreRoleScreenerState(activeRole);
+            setStep(activeRole.params ? 3 : 1);
+            setAppView("screener");
+          }}
+          onAddMoreResumes={(files) => {
+            files.forEach(f => registerFile(f.name, f));
+            pendingUploadRef.current = files;
+            restoreRoleScreenerState(activeRole);
+            setStep(activeRole.params ? 3 : 1);
+            setAppView("screener");
+          }}
+          onDelete={() => handleDeleteRole(activeRole.id)}
+          onUpdateStatus={(filename, status) => handleUpdateCandidateStatus(activeRole.id, filename, status)}
+          onBulkUpdateStatus={(filenames, status) => handleBulkUpdateStatus(activeRole.id, filenames, status)}
+          onShare={async () => {
+            if (activeRole.shareToken) {
+              return `${window.location.origin}/role/${activeRole.shareToken}`;
+            }
+            const { token } = await createShare(activeRole);
+            setRoles(prev => prev.map(r => r.id === activeRole.id ? { ...r, shareToken: token } : r));
+            return `${window.location.origin}/role/${token}`;
+          }}
+          onViewResume={async (filename) => {
+            const file = await findResumeFile(filename, activeRole.shareToken);
+            if (!file) { alert("Resume file not available."); return; }
+            const bulkResult = bulkResults.find(r => r.filename === filename);
+            const candidate = activeRole.candidates.find(c => c.filename === filename);
+            const result = bulkResult ?? (candidate ? {
+              name: candidate.name,
+              rating: candidate.aiRating,
+              reject_reason: candidate.reason,
+              reasoning: candidate.reasoning,
+              concerns: candidate.concerns,
+            } : {});
+            const url = URL.createObjectURL(file);
+            setResumeModal({ url, result });
+          }}
+        />
+        {resumeModal && (
+          <ResumeModalOverlay url={resumeModal.url} result={resumeModal.result} onClose={closeResumeModal} />
+        )}
+      </>
+    );
+  }
 
   return (
     <div className="min-h-screen flex bg-white font-sans text-neutral-900">
 
       {/* ── Dark Sidebar ── */}
       <aside className="w-60 bg-neutral-900 text-neutral-300 flex flex-col shrink-0 min-h-screen">
-        <div className="px-6 pt-8 pb-6 border-b border-neutral-800">
+        {/* All Roles button — top of sidebar */}
+        <div className="px-4 pt-4 pb-3 border-b border-neutral-800">
+          <button
+            onClick={() => leaveScreener("roles")}
+            className="flex items-center gap-2 text-sm font-medium text-neutral-300 hover:text-white transition-colors w-full text-left"
+          >
+            <span className="text-base leading-none">←</span>
+            <span>All Roles</span>
+          </button>
+        </div>
+        <div className="px-6 pt-5 pb-5 border-b border-neutral-800">
           <div className="flex items-center gap-2.5">
             <div className="w-6 h-6 bg-emerald-700 flex items-center justify-center">
               <Award className="w-3.5 h-3.5 text-white" />
@@ -2065,8 +2581,8 @@ export default function App() {
             <span className="font-medium">Screen Pool</span>
           </button>
         </nav>
-        <div className="mt-auto px-6 pb-8 text-[11px] text-neutral-600">
-          <p className="leading-relaxed">You set the bar. We screen everyone else.</p>
+        <div className="mt-auto px-6 pb-8">
+          <p className="text-[11px] text-neutral-600 leading-relaxed">You set the bar. We screen everyone else.</p>
         </div>
       </aside>
 
@@ -3394,15 +3910,25 @@ export default function App() {
                   {screening ? `Screening ${bulkProgress?.total ?? "…"} resumes` : bulkResults.length > 0 ? `${bulkResults.length} candidates screened` : "Screen the pool"}
                 </h1>
                 <p className="text-sm text-neutral-500">
-                  {screening ? "Results appear below as each resume is processed." : "Upload all resumes for the final decision table."}
+                  {screening ? "Results appear below as each resume is processed." : bulkResults.length > 0 ? "Drop more resumes above to add them to this pool." : "Upload all resumes for the final decision table."}
                 </p>
               </div>
-              <button
-                onClick={() => setStep(2)}
-                className="text-xs text-neutral-400 hover:text-neutral-700 transition-colors mb-1"
-              >
-                ← Back to calibration
-              </button>
+              <div className="flex items-center gap-3 mb-1">
+                <button
+                  onClick={() => setStep(2)}
+                  className="text-xs text-neutral-400 hover:text-neutral-700 transition-colors"
+                >
+                  ← Back to calibration
+                </button>
+                {bulkResults.length > 0 && !screening && (
+                  <button
+                    onClick={() => setShowShortlistModal(true)}
+                    className="flex items-center gap-2 px-4 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-medium transition-colors"
+                  >
+                    Send Shortlist →
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Upload zone */}
@@ -3439,7 +3965,9 @@ export default function App() {
                 ) : (
                   <div className="flex items-center gap-3">
                     <UploadCloud className="w-5 h-5 text-neutral-300" />
-                    <p className="text-sm text-neutral-500">Upload resumes · PDF or Word</p>
+                    <p className="text-sm text-neutral-500">
+                      {bulkResults.length > 0 ? "Add more resumes · PDF or Word" : "Upload resumes · PDF or Word"}
+                    </p>
                   </div>
                 )}
               </div>
@@ -3488,16 +4016,21 @@ export default function App() {
               const pct = screened > 0 ? Math.round((passed / screened) * 100) : 0;
               if (pct <= 50) return null;
               return (
-                <div className="flex items-start gap-3 bg-red-50 border-2 border-red-300 rounded-xl px-5 py-4">
-                  <span className="text-2xl leading-none">🚨</span>
+                <div className="flex items-center justify-between gap-6 border-l-4 border-amber-500 bg-amber-100 px-5 py-4">
                   <div>
-                    <p className="text-sm font-bold text-red-700">
-                      {pct}% passed. That's not a shortlist, that's everyone. Raise the bar.
+                    <p className="text-base font-bold text-amber-950 leading-snug">
+                      {pct}% passed — that's not a shortlist, that's everyone.
                     </p>
-                    <p className="text-xs text-red-500 mt-1">
-                      {passed} of {screened} screened candidates cleared P0/P1 — your criteria may be too lenient. Tighten the evaluator prompt or add harder filters.
+                    <p className="text-sm text-amber-800 mt-0.5">
+                      {passed} of {screened} screened cleared P0/P1. Your criteria may be too lenient.
                     </p>
                   </div>
+                  <button
+                    onClick={() => setStep(1)}
+                    className="shrink-0 text-xs text-amber-900 border border-amber-400 bg-transparent hover:bg-amber-200 px-3 py-1.5 transition-colors whitespace-nowrap"
+                  >
+                    Change Criteria →
+                  </button>
                 </div>
               );
             })()}
@@ -3576,15 +4109,13 @@ export default function App() {
                           </span>
                         </td>
                         <td className="px-4 py-4">
-                          {bulkResumes.some(r => r.name === res.filename) && (
-                            <button
-                              onClick={() => openResumeModal(res.filename, res)}
-                              className="flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-900 border border-neutral-200 hover:border-neutral-400 px-2.5 py-1.5 transition-colors whitespace-nowrap"
-                            >
-                              <FileText className="w-3.5 h-3.5" />
-                              View
-                            </button>
-                          )}
+                          <button
+                            onClick={() => openResumeModal(res.filename, res)}
+                            className="flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-900 border border-neutral-200 hover:border-neutral-400 px-2.5 py-1.5 transition-colors whitespace-nowrap"
+                          >
+                            <FileText className="w-3.5 h-3.5" />
+                            View
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -3593,104 +4124,72 @@ export default function App() {
               </div>
             )}
 
-            {/* ── Vagueness warning modal ── */}
-            {vaguenessModal && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-                <div className="bg-white shadow-2xl max-w-lg w-full overflow-hidden">
-                  <div className="bg-amber-50 border-b border-amber-200 px-6 py-4 flex items-start gap-3">
-                    <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <p className="text-sm font-semibold text-amber-900">Your criteria are too vague to shortlist effectively</p>
-                      <p className="text-xs text-amber-700 mt-0.5">These will pass most resumes. Define a real bar or you'll end up reviewing everyone.</p>
-                    </div>
-                  </div>
-                  <div className="px-6 py-4 flex flex-col gap-3 max-h-80 overflow-y-auto">
-                    {vaguenessModal.map((w, i) => (
-                      <div key={i} className="flex flex-col gap-1 border border-neutral-200 px-4 py-3">
-                        <p className="text-sm font-medium text-neutral-800">{w.issue}</p>
-                        <p className="text-xs text-neutral-500">{w.hint}</p>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="px-6 py-4 border-t border-neutral-100 flex gap-3">
-                    <button
-                      onClick={() => setVaguenessModal(null)}
-                      className="flex-1 px-4 py-2.5 bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 transition-colors"
-                    >
-                      Fix Criteria
-                    </button>
-                    <button
-                      onClick={() => { setVaguenessModal(null); setStep(2); }}
-                      className="px-4 py-2.5 text-sm font-medium text-neutral-500 border border-neutral-200 hover:bg-neutral-50 transition-colors"
-                    >
-                      Continue anyway
-                    </button>
-                  </div>
-                </div>
-              </div>
+
+            {/* ── Send Shortlist Modal ── */}
+            {showShortlistModal && (
+              <SendShortlistModal
+                candidates={bulkResults.map(r => {
+                  const sig = (r.signal_json as any) ?? {};
+                  const latestWork = Array.isArray(sig.work_history) && sig.work_history.length > 0 ? sig.work_history[0] : null;
+                  return {
+                    filename: r.filename,
+                    name: r.name ?? r.filename,
+                    email: r.email ?? null,
+                    aiRating: (manualRatingOverrides[r.filename] ?? r.rating) as string,
+                    reason: r.reject_reason ?? null,
+                    reasoning: r.reasoning ?? [],
+                    currentRole: latestWork?.role ?? null,
+                    currentCompany: latestWork?.company ?? null,
+                  };
+                })}
+                onConfirm={handleShortlistConfirm}
+                onCancel={() => setShowShortlistModal(false)}
+              />
             )}
 
             {/* ── Resume viewer modal ── */}
-            {resumeModal && (() => {
-              const res = resumeModal.result;
-              const rating: "P0" | "P1" | "Reject" = res?.rating;
-              const ratingConfig = {
-                P0: { bg: "bg-emerald-50", border: "border-emerald-200", text: "text-emerald-700", label: "Strong Hire" },
-                P1: { bg: "bg-amber-50", border: "border-amber-200", text: "text-amber-700", label: "Possible Hire" },
-                Reject: { bg: "bg-red-50", border: "border-red-200", text: "text-red-700", label: "Not a Fit" },
-              }[rating] ?? { bg: "bg-slate-50", border: "border-slate-200", text: "text-slate-600", label: "" };
-
-              return (
-                <div
-                  className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-                  onClick={closeResumeModal}
-                >
-                  <div
-                    className="relative bg-white shadow-2xl overflow-hidden flex flex-col"
-                    style={{ width: "min(900px, 94vw)", height: "92vh" }}
-                    onClick={e => e.stopPropagation()}
-                  >
-                    {/* Top bar */}
-                    <div className="flex items-center justify-between px-5 py-3 border-b border-neutral-200 flex-shrink-0 bg-white">
-                      <div className="flex items-center gap-3">
-                        <div className="w-7 h-7 bg-neutral-100 flex items-center justify-center flex-shrink-0">
-                          <span className="text-xs font-bold text-neutral-600">{(res?.name ?? "?")[0]?.toUpperCase()}</span>
-                        </div>
-                        <span className="text-sm font-medium text-neutral-800">{res?.name ?? "Resume"}</span>
-                      </div>
-                      <button
-                        onClick={closeResumeModal}
-                        className="flex items-center gap-1.5 text-xs font-medium text-neutral-500 hover:text-neutral-900 border border-neutral-200 hover:border-neutral-400 px-3 py-1.5 transition-colors"
-                      >
-                        <X className="w-3.5 h-3.5" /> Close
-                      </button>
-                    </div>
-
-                    {/* Decision + concerns strip */}
-                    <div className={`flex flex-wrap items-start gap-4 px-5 py-3 border-b border-neutral-100 flex-shrink-0 ${ratingConfig.bg}`}>
-                      <div className={`flex items-center gap-2 ${ratingConfig.text}`}>
-                        <span className="text-sm font-bold">{rating}</span>
-                        {ratingConfig.label && <span className="text-xs font-medium opacity-70">— {ratingConfig.label}</span>}
-                      </div>
-                      {res?.reject_reason && (
-                        <span className="text-xs text-red-700 font-medium">✕ {res.reject_reason}</span>
-                      )}
-                      {(res?.reasoning ?? []).map((r: string, i: number) => (
-                        <span key={i} className={`text-xs font-medium ${ratingConfig.text} opacity-80`}>· {r}</span>
-                      ))}
-                      {(res?.concerns ?? []).map((c: string, i: number) => (
-                        <span key={i} className="text-xs text-amber-700 font-medium bg-amber-50 border border-amber-200 rounded px-2 py-0.5">! {c}</span>
-                      ))}
-                    </div>
-
-                    {/* PDF viewer */}
-                    <PdfViewer url={resumeModal.url} className="flex-1 w-full" style={{ minHeight: 0 }} />
-                  </div>
-                </div>
-              );
-            })()}
+            {resumeModal && (
+              <ResumeModalOverlay url={resumeModal.url} result={resumeModal.result} onClose={closeResumeModal} />
+            )}
           </div>
         )}
+
+      {/* ── Vagueness warning modal — top-level so it shows from any step ── */}
+      {vaguenessModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-white shadow-2xl max-w-lg w-full overflow-hidden">
+            <div className="bg-amber-50 border-b border-amber-200 px-6 py-4 flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-amber-900">Your criteria are too vague to shortlist effectively</p>
+                <p className="text-xs text-amber-700 mt-0.5">These will pass most resumes. Define a real bar or you'll end up reviewing everyone.</p>
+              </div>
+            </div>
+            <div className="px-6 py-4 flex flex-col gap-3 max-h-80 overflow-y-auto">
+              {vaguenessModal.map((w, i) => (
+                <div key={i} className="flex flex-col gap-1 border border-neutral-200 px-4 py-3">
+                  <p className="text-sm font-medium text-neutral-800">{w.issue}</p>
+                  <p className="text-xs text-neutral-500">{w.hint}</p>
+                </div>
+              ))}
+            </div>
+            <div className="px-6 py-4 border-t border-neutral-100 flex gap-3">
+              <button
+                onClick={() => setVaguenessModal(null)}
+                className="flex-1 px-4 py-2.5 bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 transition-colors"
+              >
+                Fix Criteria
+              </button>
+              <button
+                onClick={() => { setVaguenessModal(null); setStep(2); }}
+                className="px-4 py-2.5 text-sm font-medium text-neutral-500 border border-neutral-200 hover:bg-neutral-50 transition-colors"
+              >
+                Continue anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       </main>
       </div>

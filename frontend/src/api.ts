@@ -280,6 +280,42 @@ export async function dynamicTweakPrompt(
   return safeJson(res);
 }
 
+// ── Share API ─────────────────────────────────────────────────────────────────
+
+const SHARE_BASE = `${BASE}/share`;
+
+export async function createShare(role: object): Promise<{ token: string }> {
+  const res = await fetch(SHARE_BASE, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role }),
+  });
+  return safeJson(res);
+}
+
+export async function getShare(token: string): Promise<{ role: any; availableFiles: string[] }> {
+  const res = await fetch(`${SHARE_BASE}/${token}`);
+  return safeJson(res);
+}
+
+export async function updateShare(token: string, role: object): Promise<void> {
+  await fetch(`${SHARE_BASE}/${token}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role }),
+  });
+}
+
+export async function uploadShareFiles(token: string, files: File[]): Promise<void> {
+  const fd = new FormData();
+  files.forEach(f => fd.append("files", f, f.name));
+  await fetch(`${SHARE_BASE}/${token}/files`, { method: "POST", body: fd });
+}
+
+export function getShareFileUrl(token: string, filename: string): string {
+  return `${SHARE_BASE}/${token}/file/${encodeURIComponent(filename)}`;
+}
+
 export async function* bulkEvalStream(
   candidates: { filename: string; name: string; email: string | null; phone: string | null; signal_json: object }[],
   evaluatorPrompt: string
