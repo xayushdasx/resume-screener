@@ -13,7 +13,7 @@ interface RoleDetailProps {
   onUpdateStatus: (filename: string, status: ATSCandidate["status"]) => void;
   onBulkUpdateStatus: (filenames: string[], status: ATSCandidate["status"]) => void;
   onViewResume?: (filename: string) => void;
-  onShare?: () => Promise<string>; // returns the shareable URL
+  onShare?: () => Promise<{ url: string; filesUploaded: number; filesMissing: number }>;
 }
 
 const RATING_CLS: Record<string, string> = {
@@ -66,6 +66,7 @@ export function RoleDetail({
   const [shareUrl, setShareUrl] = useState<string | null>(role.shareToken ? `${window.location.origin}/role/${role.shareToken}` : null);
   const [sharing, setSharing] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [shareUploadStats, setShareUploadStats] = useState<{ uploaded: number; missing: number } | null>(null);
 
   const countFor = (key: TabKey) =>
     key === "all" ? role.candidates.length : role.candidates.filter(c => c.status === key).length;
@@ -197,9 +198,11 @@ export function RoleDetail({
               onClick={async () => {
                 setShareModalOpen(true);
                 setSharing(true);
+                setShareUploadStats(null);
                 try {
-                  const url = await onShare();
-                  setShareUrl(url);
+                  const result = await onShare();
+                  setShareUrl(result.url);
+                  setShareUploadStats({ uploaded: result.filesUploaded, missing: result.filesMissing });
                 } catch {
                   // ignore
                 } finally {
@@ -536,7 +539,7 @@ export function RoleDetail({
               {sharing ? (
                 <div className="flex items-center gap-3 text-sm text-neutral-500">
                   <div className="w-4 h-4 border-2 border-neutral-300 border-t-neutral-700 rounded-full animate-spin" />
-                  Creating share link…
+                  Uploading resumes for sharing…
                 </div>
               ) : shareUrl ? (
                 <div className="flex flex-col gap-3">
@@ -555,6 +558,13 @@ export function RoleDetail({
                       {copied ? "Copied!" : "Copy"}
                     </button>
                   </div>
+                  {shareUploadStats && (
+                    <p className={`text-[11px] ${shareUploadStats.uploaded === 0 ? "text-amber-600" : "text-emerald-600"}`}>
+                      {shareUploadStats.uploaded === 0
+                        ? `No resume files found on this device — PDFs won't be viewable via the link.`
+                        : `${shareUploadStats.uploaded} resume${shareUploadStats.uploaded !== 1 ? "s" : ""} uploaded${shareUploadStats.missing > 0 ? ` · ${shareUploadStats.missing} not found on this device` : ""}.`}
+                    </p>
+                  )}
                   <p className="text-[11px] text-neutral-400">This link gives full access — the recipient can view all candidates, update statuses, screen more resumes, and view PDFs.</p>
                 </div>
               ) : (

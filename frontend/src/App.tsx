@@ -2441,18 +2441,29 @@ export default function App() {
     uploadShareFiles(shareToken, files).catch(() => {});
   };
 
-  // Helper: load all candidate files for a role from memory/IDB and upload to share store
-  const uploadAllRoleFilesToShare = async (role: ATSRole, shareToken: string) => {
+  // Helper: load all candidate files for a role from memory/IDB and upload to share store.
+  // Returns { uploaded, missing } — missing means file not in memory or IDB on this device.
+  const uploadAllRoleFilesToShare = async (
+    role: ATSRole,
+    shareToken: string,
+  ): Promise<{ uploaded: number; missing: number }> => {
     const files: File[] = [];
+    let missing = 0;
     for (const c of role.candidates) {
       const mem = allFilesRef.current.get(c.filename)
         ?? bulkResumes.find(r => r.name === c.filename)?.file
         ?? tasteResumes.find(r => r.name === c.filename)?.file;
       if (mem) { files.push(mem); continue; }
       const fromIdb = await idbGetFile(c.filename);
-      if (fromIdb) files.push(fromIdb);
+      if (fromIdb) { files.push(fromIdb); continue; }
+      missing++;
     }
-    if (files.length > 0) await uploadShareFiles(shareToken, files);
+    // Upload in batches of 5 to avoid oversized requests
+    const BATCH = 5;
+    for (let i = 0; i < files.length; i += BATCH) {
+      await uploadShareFiles(shareToken, files.slice(i, i + BATCH));
+    }
+    return { uploaded: files.length, missing };
   };
 
   // ── ATS view guards — early return before the screener shell ──────────────
@@ -2549,8 +2560,8 @@ export default function App() {
             if (!activeRole.shareToken) {
               setRoles(prev => prev.map(r => r.id === activeRole.id ? { ...r, shareToken: token } : r));
             }
-            await uploadAllRoleFilesToShare(roleWithToken, token);
-            return `${window.location.origin}/role/${token}`;
+            const { uploaded, missing } = await uploadAllRoleFilesToShare(roleWithToken, token);
+            return { url: `${window.location.origin}/role/${token}`, filesUploaded: uploaded, filesMissing: missing };
           }}
           onViewResume={async (filename) => {
             const file = await findResumeFile(filename, activeRole.shareToken);

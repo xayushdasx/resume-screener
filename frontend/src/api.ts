@@ -312,7 +312,11 @@ export async function updateShare(token: string, role: object): Promise<void> {
 export async function uploadShareFiles(token: string, files: File[]): Promise<void> {
   const fd = new FormData();
   files.forEach(f => fd.append("files", f, f.name));
-  await fetch(`${SHARE_BASE}/${token}/files`, { method: "POST", body: fd });
+  const res = await fetch(`${SHARE_BASE}/${token}/files`, { method: "POST", body: fd });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`File upload failed (${res.status}): ${text.slice(0, 200)}`);
+  }
 }
 
 export function getShareFileUrl(token: string, filename: string): string {
