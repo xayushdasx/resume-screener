@@ -196,16 +196,14 @@ export function RoleDetail({
             <button
               onClick={async () => {
                 setShareModalOpen(true);
-                if (!shareUrl) {
-                  setSharing(true);
-                  try {
-                    const url = await onShare();
-                    setShareUrl(url);
-                  } catch {
-                    // ignore
-                  } finally {
-                    setSharing(false);
-                  }
+                setSharing(true);
+                try {
+                  const url = await onShare();
+                  setShareUrl(url);
+                } catch {
+                  // ignore
+                } finally {
+                  setSharing(false);
                 }
               }}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-neutral-200 text-neutral-600 hover:border-neutral-400 transition-colors"
