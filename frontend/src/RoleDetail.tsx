@@ -400,7 +400,7 @@ export function RoleDetail({
                   <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-400 text-center">Exp.</span>
                   <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-400">College</span>
                   <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-400 text-right">Screened</span>
-                  <span />
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-400 text-right">Resume</span>
                 </div>
 
                 {/* Rows */}
