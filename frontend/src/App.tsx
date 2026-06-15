@@ -2452,7 +2452,7 @@ export default function App() {
       const fromIdb = await idbGetFile(c.filename);
       if (fromIdb) files.push(fromIdb);
     }
-    if (files.length > 0) uploadShareFiles(shareToken, files).catch(() => {});
+    if (files.length > 0) await uploadShareFiles(shareToken, files);
   };
 
   // ── ATS view guards — early return before the screener shell ──────────────
@@ -2490,7 +2490,7 @@ export default function App() {
           if (!role.shareToken) {
             setRoles(prev => prev.map(r => r.id === roleId ? { ...r, shareToken: token } : r));
           }
-          uploadAllRoleFilesToShare(roleWithToken, token);
+          await uploadAllRoleFilesToShare(roleWithToken, token);
           return `${window.location.origin}/role/${token}`;
         }}
       />
@@ -2549,7 +2549,7 @@ export default function App() {
             if (!activeRole.shareToken) {
               setRoles(prev => prev.map(r => r.id === activeRole.id ? { ...r, shareToken: token } : r));
             }
-            uploadAllRoleFilesToShare(roleWithToken, token);
+            await uploadAllRoleFilesToShare(roleWithToken, token);
             return `${window.location.origin}/role/${token}`;
           }}
           onViewResume={async (filename) => {

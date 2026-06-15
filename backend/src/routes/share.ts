@@ -9,7 +9,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 
 const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL;
 const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 const SHARE_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
-const MAX_FILE_REDIS_BYTES = 500 * 1024;       // 500 KB — safe under Upstash 1 MB per-request limit
+const MAX_FILE_REDIS_BYTES = 700 * 1024;       // 700 KB → ~933 KB base64, safe under Upstash 1 MB per-request limit
 
 async function redisExec(cmd: (string | number)[]): Promise<any> {
   if (!REDIS_URL || !REDIS_TOKEN) return null;
@@ -40,7 +40,7 @@ async function redisLoad(token: string): Promise<any | null> {
   try { return JSON.parse(raw); } catch { return null; }
 }
 
-// Files stored as "mimeType:base64data" — only for files ≤ 500 KB
+// Files stored as "mimeType:base64data" — only for files ≤ 700 KB
 async function redisSetFile(token: string, filename: string, mimeType: string, buf: Buffer): Promise<void> {
   const value = `${mimeType}:${buf.toString("base64")}`;
   await redisExec(["SET", `file:${token}:${encodeURIComponent(filename)}`, value, "EX", SHARE_TTL_SECONDS]);
