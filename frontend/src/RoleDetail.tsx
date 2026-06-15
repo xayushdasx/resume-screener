@@ -478,15 +478,14 @@ export function RoleDetail({
 
                         {/* View resume */}
                         {onViewResume && (
-                          <div className="flex justify-end">
+                          <div className="flex justify-end pl-4">
                             <button
                               onClick={e => {
                                 e.stopPropagation();
                                 onViewResume(c.filename);
                               }}
-                              className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-[11px] font-medium text-neutral-500 hover:text-neutral-900 border border-neutral-200 hover:border-neutral-400 px-2 py-1 transition-all whitespace-nowrap"
+                              className="opacity-0 group-hover:opacity-100 text-[11px] font-medium text-neutral-500 hover:text-neutral-900 border-b border-dashed border-neutral-400 hover:border-neutral-900 transition-colors whitespace-nowrap"
                             >
-                              <FileText className="w-3 h-3" />
                               View
                             </button>
                           </div>
