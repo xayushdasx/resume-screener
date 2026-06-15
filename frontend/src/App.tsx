@@ -2434,8 +2434,13 @@ export default function App() {
         onDeleteRole={handleDeleteRole}
         onShareRole={async (roleId) => {
           const role = roles.find(r => r.id === roleId)!;
-          if (role.shareToken) return `${window.location.origin}/role/${role.shareToken}`;
+          if (role.shareToken) {
+            updateShare(role.shareToken, role).catch(() => {});
+            return `${window.location.origin}/role/${role.shareToken}`;
+          }
           const { token } = await createShare(role);
+          const roleWithToken = { ...role, shareToken: token };
+          updateShare(token, roleWithToken).catch(() => {});
           setRoles(prev => prev.map(r => r.id === roleId ? { ...r, shareToken: token } : r));
           return `${window.location.origin}/role/${token}`;
         }}
@@ -2490,9 +2495,14 @@ export default function App() {
           onBulkUpdateStatus={(filenames, status) => handleBulkUpdateStatus(activeRole.id, filenames, status)}
           onShare={async () => {
             if (activeRole.shareToken) {
+              // Always push the latest role state to the backend when share is opened
+              updateShare(activeRole.shareToken, activeRole).catch(() => {});
               return `${window.location.origin}/role/${activeRole.shareToken}`;
             }
             const { token } = await createShare(activeRole);
+            // Immediately sync the updated role (with shareToken) back to backend
+            const roleWithToken = { ...activeRole, shareToken: token };
+            updateShare(token, roleWithToken).catch(() => {});
             setRoles(prev => prev.map(r => r.id === activeRole.id ? { ...r, shareToken: token } : r));
             return `${window.location.origin}/role/${token}`;
           }}
