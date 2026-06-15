@@ -2189,7 +2189,7 @@ export default function App() {
     const screened = bulkResults.filter(r => effectiveRating(r) !== "Error").length;
     const passed = bulkResults.filter(r => effectiveRating(r) === "P0" || effectiveRating(r) === "P1").length;
     const pct = screened > 0 ? Math.round((passed / screened) * 100) : 0;
-    if (pct > 50) setHighPassDialog({ pct, passed, screened });
+    if (pct > 30) setHighPassDialog({ pct, passed, screened });
   }, [screening]);
 
   const exportCsv = () => {
