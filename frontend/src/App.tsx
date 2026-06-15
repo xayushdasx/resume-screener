@@ -2441,6 +2441,20 @@ export default function App() {
     uploadShareFiles(shareToken, files).catch(() => {});
   };
 
+  // Helper: load all candidate files for a role from memory/IDB and upload to share store
+  const uploadAllRoleFilesToShare = async (role: ATSRole, shareToken: string) => {
+    const files: File[] = [];
+    for (const c of role.candidates) {
+      const mem = allFilesRef.current.get(c.filename)
+        ?? bulkResumes.find(r => r.name === c.filename)?.file
+        ?? tasteResumes.find(r => r.name === c.filename)?.file;
+      if (mem) { files.push(mem); continue; }
+      const fromIdb = await idbGetFile(c.filename);
+      if (fromIdb) files.push(fromIdb);
+    }
+    if (files.length > 0) uploadShareFiles(shareToken, files).catch(() => {});
+  };
+
   // ── ATS view guards — early return before the screener shell ──────────────
 
   if (shareLoadState === "loading") {
@@ -2470,14 +2484,13 @@ export default function App() {
         onDeleteRole={handleDeleteRole}
         onShareRole={async (roleId) => {
           const role = roles.find(r => r.id === roleId)!;
-          if (role.shareToken) {
-            updateShare(role.shareToken, role).catch(() => {});
-            return `${window.location.origin}/role/${role.shareToken}`;
-          }
-          const { token } = await createShare(role);
+          const token = role.shareToken ?? (await createShare(role)).token;
           const roleWithToken = { ...role, shareToken: token };
           updateShare(token, roleWithToken).catch(() => {});
-          setRoles(prev => prev.map(r => r.id === roleId ? { ...r, shareToken: token } : r));
+          if (!role.shareToken) {
+            setRoles(prev => prev.map(r => r.id === roleId ? { ...r, shareToken: token } : r));
+          }
+          uploadAllRoleFilesToShare(roleWithToken, token);
           return `${window.location.origin}/role/${token}`;
         }}
       />
@@ -2530,16 +2543,13 @@ export default function App() {
           onUpdateStatus={(filename, status) => handleUpdateCandidateStatus(activeRole.id, filename, status)}
           onBulkUpdateStatus={(filenames, status) => handleBulkUpdateStatus(activeRole.id, filenames, status)}
           onShare={async () => {
-            if (activeRole.shareToken) {
-              // Always push the latest role state to the backend when share is opened
-              updateShare(activeRole.shareToken, activeRole).catch(() => {});
-              return `${window.location.origin}/role/${activeRole.shareToken}`;
-            }
-            const { token } = await createShare(activeRole);
-            // Immediately sync the updated role (with shareToken) back to backend
+            const token = activeRole.shareToken ?? (await createShare(activeRole)).token;
             const roleWithToken = { ...activeRole, shareToken: token };
             updateShare(token, roleWithToken).catch(() => {});
-            setRoles(prev => prev.map(r => r.id === activeRole.id ? { ...r, shareToken: token } : r));
+            if (!activeRole.shareToken) {
+              setRoles(prev => prev.map(r => r.id === activeRole.id ? { ...r, shareToken: token } : r));
+            }
+            uploadAllRoleFilesToShare(roleWithToken, token);
             return `${window.location.origin}/role/${token}`;
           }}
           onViewResume={async (filename) => {
