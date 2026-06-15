@@ -6,11 +6,10 @@ const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 // ── Upstash Redis — persistent share storage ──────────────────────────────────
-// Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in Render env vars.
-// Falls back to in-memory when not configured (local dev only).
 const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL;
 const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 const SHARE_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
+const MAX_FILE_REDIS_BYTES = 500 * 1024;       // 500 KB — safe under Upstash 1 MB per-request limit
 
 async function redisExec(cmd: (string | number)[]): Promise<any> {
   if (!REDIS_URL || !REDIS_TOKEN) return null;
@@ -40,13 +39,26 @@ async function redisLoad(token: string): Promise<any | null> {
   if (!raw) return null;
   try { return JSON.parse(raw); } catch { return null; }
 }
+
+// Files stored as "mimeType:base64data" — only for files ≤ 500 KB
+async function redisSetFile(token: string, filename: string, mimeType: string, buf: Buffer): Promise<void> {
+  const value = `${mimeType}:${buf.toString("base64")}`;
+  await redisExec(["SET", `file:${token}:${encodeURIComponent(filename)}`, value, "EX", SHARE_TTL_SECONDS]);
+}
+
+async function redisGetFile(token: string, filename: string): Promise<{ buffer: Buffer; mimeType: string } | null> {
+  const raw = await redisExec(["GET", `file:${token}:${encodeURIComponent(filename)}`]);
+  if (!raw) return null;
+  const idx = (raw as string).indexOf(":");
+  if (idx === -1) return null;
+  const mimeType = (raw as string).slice(0, idx);
+  const buffer = Buffer.from((raw as string).slice(idx + 1), "base64");
+  return { buffer, mimeType };
+}
 // ─────────────────────────────────────────────────────────────────────────────
 
-// In-memory fallback for role data when Redis not configured (local dev)
 const localStore = new Map<string, any>();
-
-// In-memory file store — PDFs are ephemeral (re-uploadable, not critical for sharing)
-const fileStore = new Map<string, Map<string, { buffer: Buffer; mimeType: string }>>();
+const fileStore  = new Map<string, Map<string, { buffer: Buffer; mimeType: string }>>();
 
 function slugify(text: string): string {
   return (text || "role")
@@ -70,7 +82,7 @@ router.post("/", async (req: Request, res: Response) => {
   res.json({ token });
 });
 
-// GET /:token → get role data + available file names
+// GET /:token → get role data
 router.get("/:token", async (req: Request, res: Response) => {
   const { token } = req.params;
   let role = await redisLoad(token);
@@ -80,7 +92,7 @@ router.get("/:token", async (req: Request, res: Response) => {
   res.json({ role, availableFiles: files ? [...files.keys()] : [] });
 });
 
-// PUT /:token → update role data (candidate status changes, new screening results)
+// PUT /:token → update role data
 router.put("/:token", async (req: Request, res: Response) => {
   const { token } = req.params;
   const { role } = req.body;
@@ -91,26 +103,33 @@ router.put("/:token", async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-// POST /:token/files → upload PDF/doc files
-router.post("/:token/files", upload.array("files"), (req: Request, res: Response) => {
+// POST /:token/files → upload PDF/doc files, persist small ones to Redis
+router.post("/:token/files", upload.array("files"), async (req: Request, res: Response) => {
   const { token } = req.params;
   if (!fileStore.has(token)) fileStore.set(token, new Map());
   const files = (req.files as Express.Multer.File[]) ?? [];
   const bucket = fileStore.get(token)!;
   for (const f of files) {
     bucket.set(f.originalname, { buffer: f.buffer, mimeType: f.mimetype });
+    if (f.buffer.length <= MAX_FILE_REDIS_BYTES) {
+      await redisSetFile(token, f.originalname, f.mimetype, f.buffer);
+    }
   }
   res.json({ ok: true, stored: files.map(f => f.originalname) });
 });
 
-// GET /:token/file/:filename → serve a PDF/doc
-router.get("/:token/file/:filename", (req: Request, res: Response) => {
+// GET /:token/file/:filename → serve a PDF/doc, fall back to Redis if not in memory
+router.get("/:token/file/:filename", async (req: Request, res: Response) => {
   const { token } = req.params;
+  const filename = decodeURIComponent(req.params.filename);
   const bucket = fileStore.get(token);
-  const fileData = bucket?.get(decodeURIComponent(req.params.filename));
+  let fileData = bucket?.get(filename) ?? null;
+  if (!fileData) {
+    fileData = await redisGetFile(token, filename);
+  }
   if (!fileData) { res.status(404).json({ error: "File not found" }); return; }
   res.setHeader("Content-Type", fileData.mimeType || "application/pdf");
-  res.setHeader("Content-Disposition", `inline; filename="${req.params.filename}"`);
+  res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
   res.send(fileData.buffer);
 });
 
