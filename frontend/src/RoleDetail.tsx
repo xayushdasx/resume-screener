@@ -484,7 +484,7 @@ export function RoleDetail({
                                 e.stopPropagation();
                                 onViewResume(c.filename);
                               }}
-                              className="opacity-0 group-hover:opacity-100 text-[11px] font-medium text-neutral-500 hover:text-neutral-900 border-b border-dashed border-neutral-400 hover:border-neutral-900 transition-colors whitespace-nowrap"
+                              className="text-[11px] font-medium text-neutral-500 hover:text-neutral-900 border-b border-dashed border-neutral-400 hover:border-neutral-900 transition-colors whitespace-nowrap"
                             >
                               View
                             </button>
