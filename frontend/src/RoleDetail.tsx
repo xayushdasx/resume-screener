@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { ArrowLeft, Plus, Users, Award, Trash2, Check, X, Bookmark, ChevronDown, Search, FileText, FlaskConical, Share2, Copy, CheckCheck } from "lucide-react";
+import { ArrowLeft, Plus, Users, Award, Trash2, Check, X, Bookmark, ChevronDown, Search, FileText, FlaskConical, Share2, Copy, CheckCheck, Download } from "lucide-react";
 import type { ATSRole, ATSCandidate } from "./RolesList";
 
 type TabKey = "all" | "new" | "shortlisted" | "rejected" | "saved";
@@ -122,6 +122,32 @@ export function RoleDetail({
   const handleDelete = () => {
     if (!deleteConfirm) { setDeleteConfirm(true); return; }
     onDelete();
+  };
+
+  const exportCsv = () => {
+    const escape = (v: string | null | undefined) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const headers = ["Name", "Email", "Phone", "AI Rating", "Status", "Current Role", "Current Company", "Experience (yrs)", "College", "Top Reason", "Screened On"];
+    const rows = filtered.map(c => [
+      escape(c.name),
+      escape(c.email),
+      escape(c.phone),
+      escape(c.aiRating),
+      escape(c.status),
+      escape(c.currentRole),
+      escape(c.currentCompany),
+      escape(c.yearsExperience != null ? String(c.yearsExperience) : ""),
+      escape(c.collegeName),
+      escape(c.reason ?? c.reasoning?.[0]),
+      escape(new Date(c.runAt).toLocaleDateString("en-IN")),
+    ]);
+    const csv = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${role.title.replace(/[^a-z0-9]/gi, "_")}_candidates.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -305,6 +331,15 @@ export function RoleDetail({
                   className="text-xs border border-neutral-200 pl-8 pr-3 py-1.5 w-52 focus:outline-none focus:border-neutral-400 bg-white text-neutral-700 placeholder-neutral-400 transition-colors"
                 />
               </div>
+
+              {/* Export CSV */}
+              <button
+                onClick={exportCsv}
+                className="flex items-center gap-1.5 text-xs text-neutral-500 hover:text-neutral-900 border border-neutral-200 hover:border-neutral-400 px-3 py-1.5 transition-colors shrink-0"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Export CSV
+              </button>
             </div>
 
             {/* Bulk actions bar */}
@@ -398,8 +433,11 @@ export function RoleDetail({
                           <Avatar name={c.name} />
                           <div className="min-w-0">
                             <p className="text-sm font-medium text-neutral-900 truncate">{c.name}</p>
+                            {roleAtCompany && (
+                              <p className="text-xs text-neutral-400 truncate">{roleAtCompany}</p>
+                            )}
                             <p className="text-xs text-neutral-400 truncate">
-                              {roleAtCompany || c.email || ""}
+                              {[c.email, c.phone].filter(Boolean).join(" · ")}
                             </p>
                           </div>
                         </div>
