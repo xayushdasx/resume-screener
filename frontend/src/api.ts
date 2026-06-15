@@ -5,11 +5,14 @@ const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "/api";
 async function safeJson(res: Response) {
   const text = await res.text();
   if (!text) throw new Error(`Server returned empty response (status ${res.status})`);
+  let parsed: any;
   try {
-    return JSON.parse(text);
+    parsed = JSON.parse(text);
   } catch {
     throw new Error(`Invalid JSON from server (status ${res.status}): ${text.slice(0, 200)}`);
   }
+  if (!res.ok) throw new Error(parsed?.error ?? `Server error (${res.status})`);
+  return parsed;
 }
 
 export async function generateJd(

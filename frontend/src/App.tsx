@@ -1467,6 +1467,7 @@ export default function App() {
     setResumeModal(null);
   };
   const [bulkResults, setBulkResults] = useState<any[]>([]);
+  const [highPassDialog, setHighPassDialog] = useState<{ pct: number; passed: number; screened: number } | null>(null);
   const [screening, setScreening] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{ phase: string; done: number; total: number } | null>(null);
   const [bulkParseErrorCount, setBulkParseErrorCount] = useState(0);
@@ -1519,6 +1520,7 @@ export default function App() {
   const [roles, setRoles] = useState<ATSRole[]>(() => readRoles());
   const [showShortlistModal, setShowShortlistModal] = useState(false);
   const shortlistSentRef = useRef(false);
+  const [shareLoadState, setShareLoadState] = useState<"idle" | "loading" | "error">("idle");
 
   const paramsDataRef = useRef(paramsData);
   useEffect(() => { paramsDataRef.current = paramsData; }, [paramsData]);
@@ -1528,18 +1530,20 @@ export default function App() {
     const match = window.location.pathname.match(/^\/role\/([^/]+)$/);
     const shareToken = match ? match[1] : null;
     if (!shareToken) return;
-    getShare(shareToken).then(({ role }) => {
-      const sharedRole: ATSRole = { ...role, shareToken };
-      setRoles(prev => {
-        // Replace if already present (re-visit), otherwise prepend
-        const exists = prev.some(r => r.shareToken === shareToken);
-        return exists ? prev.map(r => r.shareToken === shareToken ? sharedRole : r) : [sharedRole, ...prev];
-      });
-      setActiveRoleId(sharedRole.id);
-      setAppView("role-detail");
-    }).catch(() => {
-      alert("This share link has expired or is no longer available.");
-    });
+    setShareLoadState("loading");
+    getShare(shareToken)
+      .then(({ role }) => {
+        if (!role || !role.id) throw new Error("Invalid share data");
+        const sharedRole: ATSRole = { ...role, shareToken };
+        setRoles(prev => {
+          const exists = prev.some(r => r.shareToken === shareToken);
+          return exists ? prev.map(r => r.shareToken === shareToken ? sharedRole : r) : [sharedRole, ...prev];
+        });
+        setActiveRoleId(sharedRole.id);
+        setAppView("role-detail");
+        setShareLoadState("idle");
+      })
+      .catch(() => setShareLoadState("error"));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2176,6 +2180,18 @@ export default function App() {
 
   const effectiveRating = (r: any): string => manualRatingOverrides[r.filename] ?? r.rating;
 
+  const prevScreeningRef = React.useRef(false);
+  React.useEffect(() => {
+    const wasScreening = prevScreeningRef.current;
+    prevScreeningRef.current = screening;
+    if (!wasScreening || screening) return; // only fires on true→false transition (screening just finished)
+    if (bulkResults.length === 0) return;
+    const screened = bulkResults.filter(r => effectiveRating(r) !== "Error").length;
+    const passed = bulkResults.filter(r => effectiveRating(r) === "P0" || effectiveRating(r) === "P1").length;
+    const pct = screened > 0 ? Math.round((passed / screened) * 100) : 0;
+    if (pct > 50) setHighPassDialog({ pct, passed, screened });
+  }, [screening]);
+
   const exportCsv = () => {
     if (bulkResults.length === 0) return;
     const escape = (v: string | null | undefined) => `"${String(v ?? "").replace(/"/g, '""')}"`;
@@ -2359,6 +2375,7 @@ export default function App() {
     setTasteIntroSeen(false);
     setBulkResumes([]);
     setBulkResults([]);
+    setHighPassDialog(null);
     setScreening(false);
     setBulkProgress(null);
     setBulkParseErrorCount(0);
@@ -2425,6 +2442,25 @@ export default function App() {
   };
 
   // ── ATS view guards — early return before the screener shell ──────────────
+
+  if (shareLoadState === "loading") {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-neutral-50 gap-4">
+        <div className="w-6 h-6 border-2 border-neutral-300 border-t-neutral-700 rounded-full animate-spin" />
+        <p className="text-sm text-neutral-500">Loading shared role…</p>
+      </div>
+    );
+  }
+
+  if (shareLoadState === "error") {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-neutral-50 gap-3">
+        <p className="text-base font-semibold text-neutral-800">This share link has expired or is no longer available.</p>
+        <p className="text-sm text-neutral-400">The person who shared it may need to re-share.</p>
+      </div>
+    );
+  }
+
   if (appView === "roles") {
     return (
       <RolesList
@@ -4019,31 +4055,6 @@ export default function App() {
               </div>
             )}
 
-            {(() => {
-              if (screening || bulkResults.length === 0) return null;
-              const screened = bulkResults.filter(r => effectiveRating(r) !== "Error").length;
-              const passed = bulkResults.filter(r => effectiveRating(r) === "P0" || effectiveRating(r) === "P1").length;
-              const pct = screened > 0 ? Math.round((passed / screened) * 100) : 0;
-              if (pct <= 50) return null;
-              return (
-                <div className="flex items-center justify-between gap-6 border-l-4 border-amber-500 bg-amber-100 px-5 py-4">
-                  <div>
-                    <p className="text-base font-bold text-amber-950 leading-snug">
-                      {pct}% passed — that's not a shortlist, that's everyone.
-                    </p>
-                    <p className="text-sm text-amber-800 mt-0.5">
-                      {passed} of {screened} screened cleared P0/P1. Your criteria may be too lenient.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setStep(1)}
-                    className="shrink-0 text-xs text-amber-900 border border-amber-400 bg-transparent hover:bg-amber-200 px-3 py-1.5 transition-colors whitespace-nowrap"
-                  >
-                    Change Criteria →
-                  </button>
-                </div>
-              );
-            })()}
 
             {bulkResults.length > 0 && (
               <div className="border border-neutral-200 overflow-hidden">
@@ -4163,6 +4174,36 @@ export default function App() {
             )}
           </div>
         )}
+
+      {/* ── High pass-rate dialog ── */}
+      {highPassDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-white shadow-2xl max-w-md w-full overflow-hidden">
+            <div className="px-6 pt-6 pb-4">
+              <p className="text-lg font-bold text-neutral-900 leading-snug">
+                {highPassDialog.pct}% passed — that's not a shortlist, that's everyone.
+              </p>
+              <p className="text-sm text-neutral-500 mt-2">
+                {highPassDialog.passed} of {highPassDialog.screened} screened candidates cleared P0/P1. Your criteria may be too lenient to filter effectively.
+              </p>
+            </div>
+            <div className="px-6 pb-6 flex gap-3">
+              <button
+                onClick={() => { setHighPassDialog(null); setStep(1); }}
+                className="flex-1 px-4 py-2.5 bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-colors"
+              >
+                Change Criteria
+              </button>
+              <button
+                onClick={() => setHighPassDialog(null)}
+                className="flex-1 px-4 py-2.5 bg-neutral-200 text-neutral-600 text-sm font-medium hover:bg-neutral-300 transition-colors"
+              >
+                Continue Anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Vagueness warning modal — top-level so it shows from any step ── */}
       {vaguenessModal && (
