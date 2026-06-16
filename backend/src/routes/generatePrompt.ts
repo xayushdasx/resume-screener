@@ -570,27 +570,78 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
     return res.status(500).json({ error: e.message });
   }
 
-  // Expand pedigree arrays into explicit college/company lists for the LLM
+  // Expand pedigree arrays into explicit college/company lists for the LLM.
+  // Per-section pedigree (p0_*/p1_*) takes precedence over legacy global fields.
+  // P1 pedigree = hard reject floor (must be met to qualify for P1 or P0).
+  // P0 pedigree = additional P0-only bar (failing it caps the rating at P1).
   const expandedCriteria = { ...criteria };
-  const eduPed: string[] = Array.isArray(criteria.education_pedigree) ? criteria.education_pedigree : (criteria.education_pedigree ? [criteria.education_pedigree] : ["no_preference"]);
-  const compPed: string[] = Array.isArray(criteria.company_pedigree) ? criteria.company_pedigree : (criteria.company_pedigree ? [criteria.company_pedigree] : ["no_preference"]);
 
-  if (!eduPed.includes("no_preference") && eduPed.length > 0) {
-    const parts: string[] = [];
-    if (eduPed.includes("tier_1")) parts.push(TIER1_COLLEGES);
-    if (eduPed.includes("tier_2")) parts.push(TIER2_COLLEGES);
-    expandedCriteria.education_pedigree = `Hard requirement — candidate's EITHER bachelor's OR master's degree must be from one of the following institutions (having BOTH also qualifies): ${parts.join(" or ")}. Candidates whose bachelor's AND master's degrees are both NOT from any institution on this list must be rated Reject.`;
-  } else {
-    expandedCriteria.education_pedigree = "no_preference";
-  }
+  const toArr = (v: any): string[] => Array.isArray(v) ? v : (v ? [v] : ["no_preference"]);
+  const hasPerSection = !!(criteria.p1_education_pedigree || criteria.p0_education_pedigree || criteria.p1_company_pedigree || criteria.p0_company_pedigree);
 
-  if (!compPed.includes("no_preference") && compPed.length > 0) {
-    const parts: string[] = [];
-    if (compPed.includes("tier_1")) parts.push(TIER1_COMPANIES);
-    if (compPed.includes("tier_2")) parts.push(TIER2_COMPANIES);
-    expandedCriteria.company_pedigree = `Hard requirement — candidate must have prior experience at: ${parts.join(" or ")}. Candidates without any experience at any of these companies must be rated Reject.`;
+  if (hasPerSection) {
+    // P1 pedigree — hard reject if not met
+    const p1EduPed = toArr(criteria.p1_education_pedigree);
+    const p1CompPed = toArr(criteria.p1_company_pedigree);
+    if (!p1EduPed.includes("no_preference") && p1EduPed.length > 0) {
+      const parts: string[] = [];
+      if (p1EduPed.includes("tier_1")) parts.push(TIER1_COLLEGES);
+      if (p1EduPed.includes("tier_2")) parts.push(TIER2_COLLEGES);
+      expandedCriteria.education_pedigree = `Hard requirement (floor for P1 and P0) — candidate's EITHER bachelor's OR master's degree must be from one of the following institutions: ${parts.join(" or ")}. Candidates who meet NEITHER are rated Reject.`;
+    } else {
+      expandedCriteria.education_pedigree = "no_preference";
+    }
+    if (!p1CompPed.includes("no_preference") && p1CompPed.length > 0) {
+      const parts: string[] = [];
+      if (p1CompPed.includes("tier_1")) parts.push(TIER1_COMPANIES);
+      if (p1CompPed.includes("tier_2")) parts.push(TIER2_COMPANIES);
+      expandedCriteria.company_pedigree = `Hard requirement (floor for P1 and P0) — candidate must have prior experience at: ${parts.join(" or ")}. Candidates without any such experience are rated Reject.`;
+    } else {
+      expandedCriteria.company_pedigree = "no_preference";
+    }
+
+    // P0 pedigree — caps rating at P1 if not met
+    const p0EduPed = toArr(criteria.p0_education_pedigree);
+    const p0CompPed = toArr(criteria.p0_company_pedigree);
+    if (!p0EduPed.includes("no_preference") && p0EduPed.length > 0) {
+      const parts: string[] = [];
+      if (p0EduPed.includes("tier_1")) parts.push(TIER1_COLLEGES);
+      if (p0EduPed.includes("tier_2")) parts.push(TIER2_COLLEGES);
+      expandedCriteria.p0_education_pedigree = `P0 education bar — to be rated P0, candidate's EITHER bachelor's OR master's degree must be from: ${parts.join(" or ")}. Candidates who otherwise qualify for P0 but lack this education background should be rated P1 instead.`;
+    } else {
+      delete expandedCriteria.p0_education_pedigree;
+    }
+    if (!p0CompPed.includes("no_preference") && p0CompPed.length > 0) {
+      const parts: string[] = [];
+      if (p0CompPed.includes("tier_1")) parts.push(TIER1_COMPANIES);
+      if (p0CompPed.includes("tier_2")) parts.push(TIER2_COMPANIES);
+      expandedCriteria.p0_company_pedigree = `P0 company bar — to be rated P0, candidate must have prior experience at: ${parts.join(" or ")}. Candidates who otherwise qualify for P0 but lack this company background should be rated P1 instead.`;
+    } else {
+      delete expandedCriteria.p0_company_pedigree;
+    }
+    // Remove legacy per-section fields not expanded above
+    delete expandedCriteria.p1_education_pedigree;
+    delete expandedCriteria.p1_company_pedigree;
   } else {
-    expandedCriteria.company_pedigree = "no_preference";
+    // Legacy global pedigree fallback
+    const eduPed = toArr(criteria.education_pedigree);
+    const compPed = toArr(criteria.company_pedigree);
+    if (!eduPed.includes("no_preference") && eduPed.length > 0) {
+      const parts: string[] = [];
+      if (eduPed.includes("tier_1")) parts.push(TIER1_COLLEGES);
+      if (eduPed.includes("tier_2")) parts.push(TIER2_COLLEGES);
+      expandedCriteria.education_pedigree = `Hard requirement — candidate's EITHER bachelor's OR master's degree must be from one of the following institutions (having BOTH also qualifies): ${parts.join(" or ")}. Candidates whose bachelor's AND master's degrees are both NOT from any institution on this list must be rated Reject.`;
+    } else {
+      expandedCriteria.education_pedigree = "no_preference";
+    }
+    if (!compPed.includes("no_preference") && compPed.length > 0) {
+      const parts: string[] = [];
+      if (compPed.includes("tier_1")) parts.push(TIER1_COMPANIES);
+      if (compPed.includes("tier_2")) parts.push(TIER2_COMPANIES);
+      expandedCriteria.company_pedigree = `Hard requirement — candidate must have prior experience at: ${parts.join(" or ")}. Candidates without any experience at any of these companies must be rated Reject.`;
+    } else {
+      expandedCriteria.company_pedigree = "no_preference";
+    }
   }
 
   // Transform role-context policy fields: "ignore"/undefined → delete; others → human-readable strings for the LLM

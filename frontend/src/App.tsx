@@ -227,6 +227,10 @@ interface CriteriaState {
   skills: string[];
   education_pedigree: string[];
   company_pedigree: string[];
+  p0_education_pedigree: string[];
+  p0_company_pedigree: string[];
+  p1_education_pedigree: string[];
+  p1_company_pedigree: string[];
   non_work_weight: "ignore" | "weak_signal" | "partial" | "full";
   adjacent_roles_policy?: string;
   seniority_mismatch_policy?: string;
@@ -436,6 +440,10 @@ function buildInitialCriteria(ep: any): CriteriaState {
     skills: (ep.skills ?? []).slice(0, 12),
     education_pedigree: ["no_preference"],
     company_pedigree: ["no_preference"],
+    p0_education_pedigree: ["no_preference"],
+    p0_company_pedigree: ["no_preference"],
+    p1_education_pedigree: ["no_preference"],
+    p1_company_pedigree: ["no_preference"],
     non_work_weight: "weak_signal" as const,
     adjacent_roles_policy: "ignore",
     seniority_mismatch_policy: "ignore",
@@ -2880,59 +2888,6 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Pedigree — multi-select chips */}
-                    {(() => {
-                      const asArr = (v: unknown): string[] => Array.isArray(v) ? v : (v ? ["no_preference"] : ["no_preference"]);
-                      const togglePedigree = (field: "education_pedigree" | "company_pedigree", value: string) => {
-                        updateCriteria(c => {
-                          const current = asArr(c[field]);
-                          if (value === "no_preference") return { ...c, [field]: ["no_preference"] };
-                          const withoutNoPref = current.filter(v => v !== "no_preference");
-                          const next = withoutNoPref.includes(value)
-                            ? withoutNoPref.filter(v => v !== value)
-                            : [...withoutNoPref, value];
-                          return { ...c, [field]: next.length ? next : ["no_preference"] };
-                        });
-                      };
-                      const chips = [
-                        { value: "tier_1", label: "Tier 1" },
-                        { value: "tier_2", label: "Tier 2" },
-                        { value: "no_preference", label: "No preference" },
-                      ];
-                      const eduArr = asArr(criteria.education_pedigree);
-                      const compArr = asArr(criteria.company_pedigree);
-                      return (
-                        <div className="grid grid-cols-2 gap-8">
-                          <div className="flex flex-col gap-2">
-                            <label className="text-xs font-semibold uppercase tracking-widest text-neutral-400">Education pedigree</label>
-                            <div className="flex flex-wrap gap-2">
-                              {chips.map(opt => {
-                                const selected = eduArr.includes(opt.value);
-                                return (
-                                  <button key={opt.value} onClick={() => togglePedigree("education_pedigree", opt.value)}
-                                    className={`text-xs font-medium px-3 py-1.5 border transition-colors ${selected ? "bg-neutral-900 border-neutral-900 text-white" : "border-neutral-200 text-neutral-600 hover:border-neutral-400"}`}
-                                  >{opt.label}</button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                          <div className="flex flex-col gap-2">
-                            <label className="text-xs font-semibold uppercase tracking-widest text-neutral-400">Company pedigree</label>
-                            <div className="flex flex-wrap gap-2">
-                              {chips.map(opt => {
-                                const selected = compArr.includes(opt.value);
-                                return (
-                                  <button key={opt.value} onClick={() => togglePedigree("company_pedigree", opt.value)}
-                                    className={`text-xs font-medium px-3 py-1.5 border transition-colors ${selected ? "bg-neutral-900 border-neutral-900 text-white" : "border-neutral-200 text-neutral-600 hover:border-neutral-400"}`}
-                                  >{opt.label}</button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })()}
-
                     {/* Role Fit Signals — shown before editing signals */}
                     <AnimatePresence>
                       {!roleQsDone && criteria && (
@@ -3155,6 +3110,47 @@ export default function App() {
                           className={`w-full text-sm bg-transparent outline-none border-b pb-1 transition-colors border-emerald-200 focus:border-emerald-600 ${criteriaApplied.p0 ? "opacity-60" : ""}`}
                           style={{ minHeight: "3.5rem" }}
                         />
+                        {/* P0 pedigree */}
+                        {(() => {
+                          const asArr = (v: string[]): string[] => v?.length ? v : ["no_preference"];
+                          const toggle = (field: "p0_education_pedigree" | "p0_company_pedigree", val: string) => {
+                            updateCriteria(c => {
+                              const cur = asArr(c[field]);
+                              if (val === "no_preference") return { ...c, [field]: ["no_preference"] };
+                              const without = cur.filter(v => v !== "no_preference");
+                              const next = without.includes(val) ? without.filter(v => v !== val) : [...without, val];
+                              return { ...c, [field]: next.length ? next : ["no_preference"] };
+                            });
+                            setCriteriaApplied(prev => ({ ...prev, p0: false }));
+                          };
+                          const chips = [{ value: "tier_1", label: "Tier 1" }, { value: "tier_2", label: "Tier 2" }, { value: "no_preference", label: "Any" }];
+                          const eduArr = asArr(criteria.p0_education_pedigree);
+                          const compArr = asArr(criteria.p0_company_pedigree);
+                          return (
+                            <div className="mt-3 grid grid-cols-2 gap-4">
+                              <div className="flex flex-col gap-1.5">
+                                <span className="text-[10px] font-semibold uppercase tracking-widest text-neutral-400">Education</span>
+                                <div className="flex gap-1.5 flex-wrap">
+                                  {chips.map(opt => (
+                                    <button key={opt.value} onClick={() => toggle("p0_education_pedigree", opt.value)}
+                                      className={`text-[11px] font-medium px-2 py-0.5 border transition-colors ${eduArr.includes(opt.value) ? "bg-emerald-700 border-emerald-700 text-white" : "border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}
+                                    >{opt.label}</button>
+                                  ))}
+                                </div>
+                              </div>
+                              <div className="flex flex-col gap-1.5">
+                                <span className="text-[10px] font-semibold uppercase tracking-widest text-neutral-400">Company</span>
+                                <div className="flex gap-1.5 flex-wrap">
+                                  {chips.map(opt => (
+                                    <button key={opt.value} onClick={() => toggle("p0_company_pedigree", opt.value)}
+                                      className={`text-[11px] font-medium px-2 py-0.5 border transition-colors ${compArr.includes(opt.value) ? "bg-emerald-700 border-emerald-700 text-white" : "border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}
+                                    >{opt.label}</button>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
                         {!criteriaApplied.p0 && (
                           <div className="mt-3 flex justify-end">
                             <button
@@ -3192,6 +3188,47 @@ export default function App() {
                               className={`w-full text-sm bg-transparent outline-none border-b pb-1 transition-colors border-amber-200 focus:border-amber-600 ${criteriaApplied.p1 ? "opacity-60" : ""}`}
                               style={{ minHeight: "3.5rem" }}
                             />
+                            {/* P1 pedigree */}
+                            {(() => {
+                              const asArr = (v: string[]): string[] => v?.length ? v : ["no_preference"];
+                              const toggle = (field: "p1_education_pedigree" | "p1_company_pedigree", val: string) => {
+                                updateCriteria(c => {
+                                  const cur = asArr(c[field]);
+                                  if (val === "no_preference") return { ...c, [field]: ["no_preference"] };
+                                  const without = cur.filter(v => v !== "no_preference");
+                                  const next = without.includes(val) ? without.filter(v => v !== val) : [...without, val];
+                                  return { ...c, [field]: next.length ? next : ["no_preference"] };
+                                });
+                                setCriteriaApplied(prev => ({ ...prev, p1: false }));
+                              };
+                              const chips = [{ value: "tier_1", label: "Tier 1" }, { value: "tier_2", label: "Tier 2" }, { value: "no_preference", label: "Any" }];
+                              const eduArr = asArr(criteria.p1_education_pedigree);
+                              const compArr = asArr(criteria.p1_company_pedigree);
+                              return (
+                                <div className="mt-3 grid grid-cols-2 gap-4">
+                                  <div className="flex flex-col gap-1.5">
+                                    <span className="text-[10px] font-semibold uppercase tracking-widest text-neutral-400">Education</span>
+                                    <div className="flex gap-1.5 flex-wrap">
+                                      {chips.map(opt => (
+                                        <button key={opt.value} onClick={() => toggle("p1_education_pedigree", opt.value)}
+                                          className={`text-[11px] font-medium px-2 py-0.5 border transition-colors ${eduArr.includes(opt.value) ? "bg-amber-600 border-amber-600 text-white" : "border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}
+                                        >{opt.label}</button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                  <div className="flex flex-col gap-1.5">
+                                    <span className="text-[10px] font-semibold uppercase tracking-widest text-neutral-400">Company</span>
+                                    <div className="flex gap-1.5 flex-wrap">
+                                      {chips.map(opt => (
+                                        <button key={opt.value} onClick={() => toggle("p1_company_pedigree", opt.value)}
+                                          className={`text-[11px] font-medium px-2 py-0.5 border transition-colors ${compArr.includes(opt.value) ? "bg-amber-600 border-amber-600 text-white" : "border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}
+                                        >{opt.label}</button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })()}
                             {!criteriaApplied.p1 && (
                               <div className="mt-3 flex justify-end">
                                 <button
