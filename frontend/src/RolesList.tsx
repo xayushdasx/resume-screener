@@ -41,6 +41,7 @@ interface RolesListProps {
   onOpenRole: (roleId: string) => void;
   onDeleteRole: (roleId: string) => void;
   onShareRole?: (roleId: string) => Promise<string>;
+  onChangeCriteria?: (roleId: string) => void;
 }
 
 type StatusFilter = "all" | "active" | "draft";
@@ -69,7 +70,7 @@ function lastActivity(role: ATSRole): string {
   return dates[dates.length - 1] ?? role.createdAt;
 }
 
-export function RolesList({ roles, onNewRole, onOpenRole, onDeleteRole, onShareRole }: RolesListProps) {
+export function RolesList({ roles, onNewRole, onOpenRole, onDeleteRole, onShareRole, onChangeCriteria }: RolesListProps) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortOption>("date_desc");
@@ -267,6 +268,14 @@ export function RolesList({ roles, onNewRole, onOpenRole, onDeleteRole, onShareR
                   <div className="min-w-0 pr-4">
                     <p className="text-sm font-semibold text-neutral-900 leading-snug">{role.title}</p>
                     <p className="text-xs text-neutral-400 mt-0.5">Updated {updated}</p>
+                    {onChangeCriteria && total > 0 && (
+                      <button
+                        onClick={e => { e.stopPropagation(); onChangeCriteria(role.id); }}
+                        className="mt-1 opacity-0 group-hover:opacity-100 text-[11px] font-medium text-neutral-500 hover:text-neutral-900 border-b border-dashed border-neutral-400 hover:border-neutral-900 transition-all"
+                      >
+                        Change Criteria
+                      </button>
+                    )}
                   </div>
 
                   {/* Department */}

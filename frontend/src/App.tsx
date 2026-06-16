@@ -2501,6 +2501,11 @@ export default function App() {
         onNewRole={() => setAppView("create-role")}
         onOpenRole={id => { setActiveRoleId(id); setAppView("role-detail"); }}
         onDeleteRole={handleDeleteRole}
+        onChangeCriteria={(roleId) => {
+          setActiveRoleId(roleId);
+          setStep(1);
+          setAppView("screener");
+        }}
         onShareRole={async (roleId) => {
           const role = roles.find(r => r.id === roleId)!;
           const token = role.shareToken ?? (await createShare(role)).token;
