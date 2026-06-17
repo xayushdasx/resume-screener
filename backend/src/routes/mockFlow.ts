@@ -59,7 +59,7 @@ When calculating total experience, full-time experience, or internship experienc
 • Social work through college: NSS, NCC, Rotaract College Chapter, any social initiative run through college infrastructure.
 • Campus ambassador programs: "Brand Ambassador" roles for companies that are clearly student recruitment programs, not employment.
 
-DO NOT count any of the above toward fulltime_experience_months, total_experience_months, or any experience threshold check. Treat them as if they do not exist in the work history.
+DO NOT count any of the above toward fulltime_experience_months, total_experience_months, or any experience threshold check. Treat them as if they do not exist in the work history. UNLESS SOMEONE TELLS YOU THAT COLLEGE SOCIETY EXPERIENCE OR COLLEGE CLUB EXPERIENCE ACTUALLY WORKS
 `;
 
 const COLLEGE_ACTIVITY_EXCLUSION = `
