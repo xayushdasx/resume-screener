@@ -49,6 +49,27 @@ ALWAYS include these fields in your JSON output:
 - non_work_entries: array of { type: "course"|"bootcamp"|"fellowship"|"research"|"career_break"|"volunteering"|"other", name: string, duration_months: number|null } — empty array if none detected
 `;
 
+const COLLEGE_ACTIVITY_EXCLUSION = `
+WORK HISTORY EXCLUSION RULES — ALWAYS EXCLUDE from work_history, regardless of how they are written or titled:
+• Student clubs and societies: any org whose membership is primarily students from one institution — coding clubs, entrepreneurship cells, debate societies, cultural committees, photography clubs, music societies, drama clubs, sports committees, finance clubs, consulting clubs, product clubs, marketing societies.
+• Student chapter branches: student-run branches of external bodies — Google DSC, GDSC, Microsoft Learn Student Ambassador, GitHub Campus Expert, IEEE Student Branch, ACM Student Chapter, Meta Student Ambassador, AWS Cloud Club, CFA Society Student Chapter, Toastmasters Student Club.
+• College events and fests: Techfest, Mood Indigo, Saarang, Zeitgeist, Shaastra, Antaragni, college TEDx events, college hackathons, inter-college competitions organised by student bodies.
+• Social work mandated or facilitated by college: NSS, NCC, Rotaract College Chapter, any social initiative run through college infrastructure.
+• Campus ambassador programs: e.g. "Brand Ambassador, CoinDCX" — student programs, not employment.
+
+HOW RESUMES DISGUISE THESE — watch for all patterns:
+• Sounds like a job title: "Product Lead, Entrepreneurship Cell" or "CTO, Coding Club" — title sounds senior but org is student-run → exclude.
+• External body name used: "Google Developer Student Club — Tech Lead" or "Microsoft Student Partner" — sounds like Google/Microsoft hired them, they did not → exclude.
+• Removed the word "club": "Head of Technology, E-Cell IIT X" — E-Cell without "club" still means Entrepreneurship Cell → exclude.
+• Made it sound like a company: "Operations Lead, XYZ Student Consulting Group" — student consulting groups are clubs → exclude.
+• Festival made to sound like an event company: "Marketing Head, Zeitgeist 2024" or "Sponsorship Lead, Techfest" — college fests are not companies → exclude.
+
+ALWAYS INCLUDE — do not exclude these:
+• Named external company with no college affiliation, even if small or unknown.
+• Freelance work for external clients, even if found through college connections.
+• Paid internship at an external organisation, even if arranged through placement cell.
+`;
+
 const RECALIBRATE_SYSTEM_PROMPT = `You are an expert hiring rubric engineer with 25+ yrs of experience
 You will be given an evaluator prompt and HR feedback on a set of candidate evaluations.
 
@@ -537,7 +558,7 @@ router.post("/bulk-screen-stream", async (req: Request, res: Response) => {
         model: MODEL,
         messages: [
           { role: "system", content: compressor_prompt },
-          { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n${PEDIGREE_CONTEXT}\nResume text (return extracted signals as JSON):\n\n${resume.text}` },
+          { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n${PEDIGREE_CONTEXT}\n${COLLEGE_ACTIVITY_EXCLUSION}\nResume text (return extracted signals as JSON):\n\n${resume.text}` },
         ],
         response_format: { type: "json_object" },
       });
@@ -706,7 +727,7 @@ router.post("/screen-and-sample", async (req: Request, res: Response) => {
         model: MODEL,
         messages: [
           { role: "system", content: compressor_prompt },
-          { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n${PEDIGREE_CONTEXT}\nResume text (return extracted signals as JSON):\n\n${resume.text}` },
+          { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n${PEDIGREE_CONTEXT}\n${COLLEGE_ACTIVITY_EXCLUSION}\nResume text (return extracted signals as JSON):\n\n${resume.text}` },
         ],
         response_format: { type: "json_object" },
       });
