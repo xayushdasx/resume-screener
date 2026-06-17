@@ -120,11 +120,36 @@ The compressor_prompt must instruct the model to extract:
 - name, email, phone, total_experience_months, internship_experience_months, fulltime_experience_months, education (degree, institution, year)
   internship_experience_months: sum of duration_months for any work_history entry whose role title contains "intern", "internship", "trainee", or "apprentice" (case-insensitive). fulltime_experience_months: total_experience_months minus internship_experience_months (minimum 0).
 - work_history: [{company, role, duration_months, key_signals[], ownership_language, impact_evidence}]
+  COLLEGE ACTIVITY EXCLUSION- BASICALLY STUDENTS WHO ARE WORKING IN CLUBS, SOCIETIES AND ALL(People employed in that college as a full time employee or intern is totally fine)— apply this test to every role before extracting it:
+    "Could this organisation exist and operate without this college?"
+    If NO → exclude entirely. Do not add to work_history or count toward any experience total.
+    If YES → include as real experience.
+    If UNCERTAIN → EXCLUDE
+
+    ALWAYS EXCLUDE — college activities regardless of how they are written or titled:
+    • Student clubs and societies: any org whose membership is primarily students from one institution — coding clubs, entrepreneurship cells, debate societies, cultural committees, photography clubs, music societies, drama clubs, sports committees, finance clubs, consulting clubs, product clubs, marketing societies.
+    • Student chapter branches: student-run branches of external bodies — Google DSC, GDSC, Microsoft Learn Student Ambassador, GitHub Campus Expert, IEEE Student Branch, ACM Student Chapter, Meta Student Ambassador, AWS Cloud Club, CFA Society Student Chapter, Toastmasters Student Club.
+    • College events and fests: Techfest, Mood Indigo, Saarang, Zeitgeist, Shaastra, Antaragni, college TEDx events, college hackathons, inter-college competitions organised by student bodies.
+    • Social work mandated or facilitated by college: NSS, NCC, Rotaract College Chapter, any social initiative run through college infrastructure.
+    • Campus ambassador programs: "Brand Ambassador, CoinDCX" — student programs, not employment.
+
+    HOW RESUMES DISGUISE THESE — watch for all patterns:
+    • Sounds like a job title: "Product Lead, Entrepreneurship Cell" or "CTO, Coding Club" — title sounds senior but org is student-run → exclude.
+    • External body name used: "Google Developer Student Club — Tech Lead" or "Microsoft Student Partner" — sounds like Google/Microsoft hired them, they did not → exclude.
+    • Removed the word "club": "Head of Technology, E-Cell IIT X" — E-Cell without "club" still means Entrepreneurship Cell → exclude.
+    • Made it sound like a company: "Operations Lead, XYZ Student Consulting Group" — student consulting groups are clubs → exclude.
+    • Festival made to sound like an event company: "Marketing Head, Zeitgeist 2024" or "Sponsorship Lead, Techfest" — college fests are not companies → exclude.
+
+    ALWAYS INCLUDE — do not exclude these:
+    • Named external company with no college affiliation, even if small or unknown.
+    • Freelance work for external clients, even if found through college connections.
+    • Paid internship at an external organisation, even if arranged through placement cell.
   key_signals = 2-4 specific verbatim facts from the resume, not summaries
   ownership_language = verbatim phrase showing ownership ("owned X", "led Y", "built Z end-to-end",
     "responsible for", etc.) — null if only passive language found ("helped", "assisted", etc.)
   impact_evidence = verbatim metric or outcome ("reduced latency by 40%", "used by 200 users",
     "saved 3 hrs/week") — null if no outcome or metric stated anywhere in this experience
+
 - role_specific_signals: {fields derived from resume_signal_fields for this role}
 - tools_and_skills: [list of tools/languages mentioned]
 - red_flags_raw: [vague claims, name-drops without context, suspiciously short stints]
@@ -173,6 +198,12 @@ extracted URLs over any plain-text URLs in the resume body."
 DATE RULE: The user message will begin with "Today's date: YYYY-MM-DD". Use this date
 to calculate duration_months for any position whose end date is "Present", "Current",
 "Now", "Ongoing", or has no end date. These are active roles — do NOT return null for them.
+
+DURATION CALCULATION RULE: Both the start month and the end month are counted inclusively.
+Formula: duration_months = (end_year - start_year) * 12 + (end_month - start_month) + 1
+Example: May 2024 – Jun 2024 = 2 months (May and June both count).
+Example: Jan 2024 – Dec 2024 = 12 months.
+Example: Mar 2023 – Mar 2024 = 13 months.
 
 
 Rules: extract only what is stated, never infer, duration_months from dates or null,
@@ -549,6 +580,14 @@ When education_pedigree is provided and is not "no_preference", the value alread
 
 When company_pedigree is provided and is not "no_preference", the value already contains the full company list as a pre-formatted hard requirement string. Copy it verbatim into the ------HARD REQUIREMENTS------ section. Do NOT paraphrase, truncate, or reference the field name — paste the exact string as-is.
 
+When pedigree_edu_hard_requirement is provided, copy it verbatim into the ------HARD REQUIREMENTS------ section. Do NOT place it in P0 or P1 criteria.
+
+When pedigree_comp_hard_requirement is provided, copy it verbatim into the ------HARD REQUIREMENTS------ section. Do NOT place it in P0 or P1 criteria.
+
+When pedigree_edu_p0_differentiator is provided, copy it verbatim into the ------P0 CRITERIA------ section ONLY. This is explicitly NOT a hard requirement — do NOT place it in ------HARD REQUIREMENTS------. A candidate who fails this criterion should be rated P1, not Reject.
+
+When pedigree_comp_p0_differentiator is provided, copy it verbatim into the ------P0 CRITERIA------ section ONLY. This is explicitly NOT a hard requirement — do NOT place it in ------HARD REQUIREMENTS------. A candidate who fails this criterion should be rated P1, not Reject.
+
 Rules:
 - Generate the full prompt from ONLY the hiring manager's criteria inputs provided
 - Do not invent criteria not specified by the hiring manager
@@ -596,37 +635,41 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
     const COMP_CLAUSE = (tier: "tier_1" | "tier_2") =>
       tier === "tier_1" ? TIER1_COMPANIES : TIER2_COMPANIES;
 
+    // Helper: append pedigree hard-requirement clauses to dealbreakers so GPT's
+    // existing dealbreakers → HARD REQUIREMENTS pipeline handles them reliably.
+    // (Using a separate field + verbatim-copy instruction failed for large tier lists.)
+    const appendToDealbreakers = (clause: string) => {
+      const existing = expandedCriteria.dealbreakers;
+      expandedCriteria.dealbreakers = existing ? `${existing}\n${clause}` : clause;
+    };
+
     // ── Education pedigree ────────────────────────────────────────────────────
+    expandedCriteria.education_pedigree = "no_preference";
     if (p0EduTier && p1EduTier && p0EduTier === p1EduTier) {
       // Same tier on both → hard reject floor for everyone
-      expandedCriteria.education_pedigree = `Hard requirement: candidate's atleast one formal education degree (Bachelor's or above — B.Tech/B.E./B.S./B.Com/BBA/BA/MBBS/LLB/B.Arch, Master's, or PhD qualify; online certifications, diplomas, or short courses do NOT count) must be from one of: ${EDU_CLAUSE(p0EduTier)}. Candidates who do not meet this are rated Reject.`;
+      appendToDealbreakers(`Hard requirement (education): candidate's atleast one formal education degree (Bachelor's or above — B.Tech/B.E./B.S./B.Com/BBA/BA/MBBS/LLB/B.Arch, Master's, or PhD qualify; online certifications, diplomas, or short courses do NOT count) must be from one of: ${EDU_CLAUSE(p0EduTier)}. Candidates who do not meet this are rated Reject.`);
     } else {
-      expandedCriteria.education_pedigree = "no_preference";
       if (p1EduTier) {
-        const clause = `Hard requirement: candidate's atleast one formal education degree (Bachelor's or above — B.Tech/B.E./B.S./B.Com/BBA/BA/MBBS/LLB/B.Arch, Master's, or PhD qualify; online certifications, diplomas, or short courses do NOT count) must be from one of: ${EDU_CLAUSE(p1EduTier)}. Candidates who do not meet this are rated Reject.`;
-        expandedCriteria.p1_text = [expandedCriteria.p1_text || criteria.p1_text, clause].filter(Boolean).join(" ");
+        appendToDealbreakers(`Hard requirement (education): candidate's atleast one formal education degree (Bachelor's or above — B.Tech/B.E./B.S./B.Com/BBA/BA/MBBS/LLB/B.Arch, Master's, or PhD qualify; online certifications, diplomas, or short courses do NOT count) must be from one of: ${EDU_CLAUSE(p1EduTier)}. Candidates who do not meet this are rated Reject.`);
       }
       if (p0EduTier) {
-        const clause = `For P0, the candidate's atleast one formal education degree (Bachelor's or above — B.Tech/B.E./B.S./B.Com/BBA/BA/MBBS/LLB/B.Arch, Master's, or PhD qualify; online certifications, diplomas, or short courses from these institutions do NOT count) must be from one of: ${EDU_CLAUSE(p0EduTier)}. A candidate who meets all other P0 criteria but lacks this educational background should be rated P1 instead.`;
-        expandedCriteria.p0_text = [expandedCriteria.p0_text || criteria.p0_text, clause].filter(Boolean).join(" ");
+        expandedCriteria.pedigree_edu_p0_differentiator = `For P0 only (not a hard requirement — failing this caps the rating at P1, not Reject): candidate's atleast one formal education degree (Bachelor's or above — B.Tech/B.E./B.S./B.Com/BBA/BA/MBBS/LLB/B.Arch, Master's, or PhD qualify; online certifications, diplomas, or short courses from these institutions do NOT count) must be from one of: ${EDU_CLAUSE(p0EduTier)}. A candidate who meets all other P0 criteria but lacks this educational background should be rated P1 instead of P0.`;
       }
     }
     delete expandedCriteria.p0_education_pedigree;
     delete expandedCriteria.p1_education_pedigree;
 
     // ── Company pedigree ──────────────────────────────────────────────────────
+    expandedCriteria.company_pedigree = "no_preference";
     if (p0CompTier && p1CompTier && p0CompTier === p1CompTier) {
       // Same tier on both → hard reject floor for everyone
-      expandedCriteria.company_pedigree = `Hard requirement: candidate must have prior full-time work experience at one of: ${COMP_CLAUSE(p0CompTier)}. Candidates without this are rated Reject.`;
+      appendToDealbreakers(`Hard requirement (company): candidate must have prior full-time work experience at one of: ${COMP_CLAUSE(p0CompTier)}. Candidates without this are rated Reject.`);
     } else {
-      expandedCriteria.company_pedigree = "no_preference";
       if (p1CompTier) {
-        const clause = `Hard requirement: candidate must have prior full-time work experience at one of: ${COMP_CLAUSE(p1CompTier)}. Candidates without this are rated Reject.`;
-        expandedCriteria.p1_text = [expandedCriteria.p1_text || criteria.p1_text, clause].filter(Boolean).join(" ");
+        appendToDealbreakers(`Hard requirement (company): candidate must have prior full-time work experience at one of: ${COMP_CLAUSE(p1CompTier)}. Candidates without this are rated Reject.`);
       }
       if (p0CompTier) {
-        const clause = `For P0, the candidate must have prior full-time work experience at one of: ${COMP_CLAUSE(p0CompTier)}. A candidate who meets all other P0 criteria but lacks this company background should be rated P1 instead.`;
-        expandedCriteria.p0_text = [expandedCriteria.p0_text || criteria.p0_text, clause].filter(Boolean).join(" ");
+        expandedCriteria.pedigree_comp_p0_differentiator = `For P0 only (not a hard requirement — failing this caps the rating at P1, not Reject): candidate must have prior full-time work experience at one of: ${COMP_CLAUSE(p0CompTier)}. A candidate who meets all other P0 criteria but lacks this company background should be rated P1 instead of P0.`;
       }
     }
     delete expandedCriteria.p0_company_pedigree;

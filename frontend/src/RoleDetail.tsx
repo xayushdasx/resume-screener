@@ -385,12 +385,7 @@ export function RoleDetail({
               </p>
             ) : (
               (() => {
-                const seniority: string = (role as any).screenerState?.criteria?.seniority ?? "";
-                const showInternCol = seniority === "intern" || seniority === "junior"
-                  || role.candidates.some(c => (c.internshipMonths ?? 0) > 0);
-                const gridCols = showInternCol
-                  ? "grid-cols-[32px_1fr_72px_96px_1fr_68px_68px_100px_72px_56px]"
-                  : "grid-cols-[32px_1fr_72px_96px_1fr_80px_100px_72px_56px]";
+                const gridCols = "grid-cols-[32px_1fr_72px_96px_1fr_100px_72px_56px]";
                 const hdrCls = "text-[10px] font-bold uppercase tracking-widest text-neutral-400";
                 return (
               <div className="border border-neutral-200 border-t-0 overflow-hidden">
@@ -406,8 +401,6 @@ export function RoleDetail({
                   <span className={`${hdrCls} text-center`}>Rating</span>
                   <span className={`${hdrCls} text-center`}>Status</span>
                   <span className={hdrCls}>Top Reason</span>
-                  {showInternCol && <span className={`${hdrCls} text-center`}>Intern Exp.</span>}
-                  <span className={`${hdrCls} text-center`}>{showInternCol ? "FT Exp." : "Exp."}</span>
                   <span className={hdrCls}>College</span>
                   <span className={`${hdrCls} text-right`}>Screened</span>
                   <span className={`${hdrCls} text-right`}>Resume</span>
@@ -475,13 +468,6 @@ export function RoleDetail({
                           {c.reason ?? c.reasoning?.[0] ?? "—"}
                         </p>
 
-                        {/* Exp */}
-                        {showInternCol && (
-                          <p className="text-xs text-neutral-600 font-medium text-center">{fmtMonths(c.internshipMonths)}</p>
-                        )}
-                        <p className="text-xs text-neutral-600 font-medium text-center">
-                          {showInternCol ? fmtMonths(c.fulltimeMonths) : expLabel}
-                        </p>
 
                         {/* College */}
                         <p className="text-xs text-neutral-500 truncate">
