@@ -585,6 +585,8 @@ When pedigree_edu_hard_requirement is provided, copy it verbatim into the ------
 
 When pedigree_comp_hard_requirement is provided, copy it verbatim into the ------HARD REQUIREMENTS------ section. Do NOT place it in P0 or P1 criteria.
 
+When you encounter <<TIER1_COLLEGES>>, <<TIER2_COLLEGES>>, <<TIER1_COMPANIES>>, or <<TIER2_COMPANIES>> anywhere in the criteria, copy that token exactly as-is into the generated prompt — do NOT expand, paraphrase, or replace it. It is a placeholder that will be substituted with the full list after generation.
+
 When pedigree_edu_p0_differentiator is provided, copy it verbatim into the ------P0 CRITERIA------ section ONLY. This is explicitly NOT a hard requirement — do NOT place it in ------HARD REQUIREMENTS------. A candidate who fails this criterion should be rated P1, not Reject.
 
 When pedigree_comp_p0_differentiator is provided, copy it verbatim into the ------P0 CRITERIA------ section ONLY. This is explicitly NOT a hard requirement — do NOT place it in ------HARD REQUIREMENTS------. A candidate who fails this criterion should be rated P1, not Reject.
@@ -631,10 +633,12 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
     const p0CompTier = effectiveTier(toArr(criteria.p0_company_pedigree));
     const p1CompTier = effectiveTier(toArr(criteria.p1_company_pedigree));
 
+    // Use short placeholders — GPT passes them through as-is, backend replaces
+    // with the full verbatim list after generation so the model never paraphrases.
     const EDU_CLAUSE = (tier: "tier_1" | "tier_2") =>
-      tier === "tier_1" ? TIER1_COLLEGES : TIER2_COLLEGES;
+      tier === "tier_1" ? "<<TIER1_COLLEGES>>" : "<<TIER2_COLLEGES>>";
     const COMP_CLAUSE = (tier: "tier_1" | "tier_2") =>
-      tier === "tier_1" ? TIER1_COMPANIES : TIER2_COMPANIES;
+      tier === "tier_1" ? "<<TIER1_COMPANIES>>" : "<<TIER2_COMPANIES>>";
 
     // Helper: append pedigree hard-requirement clauses to dealbreakers so GPT's
     // existing dealbreakers → HARD REQUIREMENTS pipeline handles them reliably.
@@ -681,16 +685,16 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
     const compPed = toArr(criteria.company_pedigree);
     if (!eduPed.includes("no_preference") && eduPed.length > 0) {
       const parts: string[] = [];
-      if (eduPed.includes("tier_1")) parts.push(TIER1_COLLEGES);
-      if (eduPed.includes("tier_2")) parts.push(TIER2_COLLEGES);
+      if (eduPed.includes("tier_1")) parts.push("<<TIER1_COLLEGES>>");
+      if (eduPed.includes("tier_2")) parts.push("<<TIER2_COLLEGES>>");
       expandedCriteria.education_pedigree = `Hard requirement — candidate's EITHER bachelor's OR master's degree must be from one of the following institutions (having BOTH also qualifies): ${parts.join(" or ")}. Candidates whose bachelor's AND master's degrees are both NOT from any institution on this list must be rated Reject.`;
     } else {
       expandedCriteria.education_pedigree = "no_preference";
     }
     if (!compPed.includes("no_preference") && compPed.length > 0) {
       const parts: string[] = [];
-      if (compPed.includes("tier_1")) parts.push(TIER1_COMPANIES);
-      if (compPed.includes("tier_2")) parts.push(TIER2_COMPANIES);
+      if (compPed.includes("tier_1")) parts.push("<<TIER1_COMPANIES>>");
+      if (compPed.includes("tier_2")) parts.push("<<TIER2_COMPANIES>>");
       expandedCriteria.company_pedigree = `Hard requirement — candidate must have prior experience at: ${parts.join(" or ")}. Candidates without any experience at any of these companies must be rated Reject.`;
     } else {
       expandedCriteria.company_pedigree = "no_preference";
@@ -745,10 +749,16 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
     });
 
     trackCost("Build Evaluator Prompt", "Step 1 — Setup", "gpt-4.1-mini", completion.usage?.prompt_tokens ?? 0, completion.usage?.completion_tokens ?? 0);
-    const built = completion.choices[0].message.content?.trim() ?? "";
+    let built = completion.choices[0].message.content?.trim() ?? "";
     if (!built) {
       return res.status(500).json({ error: "Empty response from model" });
     }
+    // Replace placeholders with the full verbatim tier lists
+    built = built
+      .replace(/<<TIER1_COLLEGES>>/g, TIER1_COLLEGES)
+      .replace(/<<TIER2_COLLEGES>>/g, TIER2_COLLEGES)
+      .replace(/<<TIER1_COMPANIES>>/g, TIER1_COMPANIES)
+      .replace(/<<TIER2_COMPANIES>>/g, TIER2_COMPANIES);
     return res.json({ evaluator_prompt: built });
   } catch (e: any) {
     return res.status(500).json({ error: e.message ?? "OpenAI API error" });
