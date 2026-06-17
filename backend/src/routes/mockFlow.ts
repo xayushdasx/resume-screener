@@ -557,8 +557,8 @@ router.post("/bulk-screen-stream", async (req: Request, res: Response) => {
       const compressRes = await client.chat.completions.create({
         model: MODEL,
         messages: [
-          { role: "system", content: compressor_prompt },
-          { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n${PEDIGREE_CONTEXT}\n${COLLEGE_ACTIVITY_EXCLUSION}\nResume text (return extracted signals as JSON):\n\n${resume.text}` },
+          { role: "system", content: compressor_prompt + "\n\n" + COLLEGE_ACTIVITY_EXCLUSION },
+          { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n${PEDIGREE_CONTEXT}\nResume text (return extracted signals as JSON):\n\n${resume.text}` },
         ],
         response_format: { type: "json_object" },
       });
@@ -726,8 +726,8 @@ router.post("/screen-and-sample", async (req: Request, res: Response) => {
       const compressRes = await client.chat.completions.create({
         model: MODEL,
         messages: [
-          { role: "system", content: compressor_prompt },
-          { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n${PEDIGREE_CONTEXT}\n${COLLEGE_ACTIVITY_EXCLUSION}\nResume text (return extracted signals as JSON):\n\n${resume.text}` },
+          { role: "system", content: compressor_prompt + "\n\n" + COLLEGE_ACTIVITY_EXCLUSION },
+          { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n${PEDIGREE_CONTEXT}\nResume text (return extracted signals as JSON):\n\n${resume.text}` },
         ],
         response_format: { type: "json_object" },
       });
