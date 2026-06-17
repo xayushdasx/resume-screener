@@ -24,6 +24,18 @@ const TIER1_COMPANIES = `Razorpay, CRED, Zepto, Swiggy, Zomato, Meesho, Groww, P
 const TIER2_COMPANIES = `India: Infosys, Wipro, TCS, HCL, Tech Mahindra, Capgemini, Accenture India, Cognizant, Mphasis, Hexaware, Persistent, Coforge, Mindtree, KPIT, LTI. Global: Accenture, IBM, Deloitte, PwC, EY, KPMG`;
 // ─────────────────────────────────────────────────────────────────────────────
 
+const EVALUATOR_COLLEGE_EXCLUSION = `
+
+------COLLEGE ACTIVITY EXCLUSION — CRITICAL------
+When calculating total experience, full-time experience, or internship experience — and when applying ANY experience-based reject rules (e.g. "reject if more than X months/years of full-time experience") — you MUST completely ignore the following categories. They are NOT work experience under any circumstances:
+• Student clubs and societies: coding clubs, entrepreneurship cells (E-Cell), debate societies, cultural committees, photography clubs, music societies, drama clubs, sports committees, finance clubs, consulting clubs, product clubs, marketing societies — even if the candidate holds a title like "President", "CTO", "Head of Technology", or "Lead".
+• Student chapter branches: Google DSC/GDSC, Microsoft Learn Student Ambassador, GitHub Campus Expert, IEEE Student Branch, ACM Student Chapter, Meta Student Ambassador, AWS Cloud Club, CFA Society Student Chapter, Toastmasters Student Club.
+• College events and fests: Techfest, Mood Indigo, Saarang, Zeitgeist, Shaastra, Antaragni, college TEDx, college hackathons, inter-college competitions organised by student bodies.
+• Social work through college: NSS, NCC, Rotaract College Chapter, any social initiative run through college infrastructure.
+• Campus ambassador programs: "Brand Ambassador" roles for companies that are clearly student recruitment programs, not employment.
+
+DO NOT count any of the above toward fulltime_experience_months, total_experience_months, or any experience threshold check. Treat them as if they do not exist in the work history.`;
+
 const META_SYSTEM_PROMPT = `You are a senior hiring rubric engineer with 20+ years of experience
 building evaluation frameworks across every role type — SWE, Sales, Analytics, Product,
 Operations, Design, Finance, Marketing, and more. You have worked directly with HRs and
@@ -362,7 +374,7 @@ router.post("/test-resume", async (req: Request, res: Response) => {
     const evalCompletion = await client.chat.completions.create({
       model: "gpt-4.1-mini",
       messages: [
-        { role: "system", content: evaluator_prompt },
+        { role: "system", content: evaluator_prompt.includes("COLLEGE ACTIVITY EXCLUSION") ? evaluator_prompt : evaluator_prompt + EVALUATOR_COLLEGE_EXCLUSION },
         {
           role: "user",
           content: `Candidate signal JSON:\n\n${JSON.stringify(signalParsed)}\n\nReturn your evaluation as JSON.`,
@@ -760,6 +772,8 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
       .replace(/<<TIER2_COLLEGES>>/g, TIER2_COLLEGES)
       .replace(/<<TIER1_COMPANIES>>/g, TIER1_COMPANIES)
       .replace(/<<TIER2_COMPANIES>>/g, TIER2_COMPANIES);
+    // Always append the college activity exclusion rule so it is visible in the stored prompt
+    built = built + EVALUATOR_COLLEGE_EXCLUSION;
     return res.json({ evaluator_prompt: built });
   } catch (e: any) {
     return res.status(500).json({ error: e.message ?? "OpenAI API error" });
