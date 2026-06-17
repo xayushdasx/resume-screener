@@ -49,6 +49,19 @@ ALWAYS include these fields in your JSON output:
 - non_work_entries: array of { type: "course"|"bootcamp"|"fellowship"|"research"|"career_break"|"volunteering"|"other", name: string, duration_months: number|null } — empty array if none detected
 `;
 
+const EVALUATOR_COLLEGE_EXCLUSION = `
+
+EXPERIENCE CALCULATION RULE — CRITICAL:
+When calculating total experience, full-time experience, or internship experience — and when applying ANY experience-based reject rules (e.g. "reject if more than X months/years of full-time experience") — you MUST completely ignore the following categories. They are NOT work experience under any circumstances:
+• Student clubs and societies: coding clubs, entrepreneurship cells (E-Cell), debate societies, cultural committees, photography clubs, music societies, drama clubs, sports committees, finance clubs, consulting clubs, product clubs, marketing societies — even if the candidate holds a title like "President", "CTO", "Head of Technology", or "Lead".
+• Student chapter branches: Google DSC/GDSC, Microsoft Learn Student Ambassador, GitHub Campus Expert, IEEE Student Branch, ACM Student Chapter, Meta Student Ambassador, AWS Cloud Club, CFA Society Student Chapter, Toastmasters Student Club.
+• College events and fests: Techfest, Mood Indigo, Saarang, Zeitgeist, Shaastra, Antaragni, college TEDx, college hackathons, inter-college competitions organised by student bodies.
+• Social work through college: NSS, NCC, Rotaract College Chapter, any social initiative run through college infrastructure.
+• Campus ambassador programs: "Brand Ambassador" roles for companies that are clearly student recruitment programs, not employment.
+
+DO NOT count any of the above toward fulltime_experience_months, total_experience_months, or any experience threshold check. Treat them as if they do not exist in the work history.
+`;
+
 const COLLEGE_ACTIVITY_EXCLUSION = `
 WORK HISTORY EXCLUSION RULES — ALWAYS EXCLUDE from work_history, regardless of how they are written or titled:
 • Student clubs and societies: any org whose membership is primarily students from one institution — coding clubs, entrepreneurship cells, debate societies, cultural committees, photography clubs, music societies, drama clubs, sports committees, finance clubs, consulting clubs, product clubs, marketing societies.
@@ -570,7 +583,7 @@ router.post("/bulk-screen-stream", async (req: Request, res: Response) => {
       const evalRes = await client.chat.completions.create({
         model: MODEL,
         messages: [
-          { role: "system", content: evaluator_prompt },
+          { role: "system", content: evaluator_prompt + EVALUATOR_COLLEGE_EXCLUSION },
           { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n\nCandidate signal JSON:\n\n${JSON.stringify(signalJson)}\n\nReturn your evaluation as JSON.` },
         ],
         response_format: { type: "json_object" },
@@ -739,7 +752,7 @@ router.post("/screen-and-sample", async (req: Request, res: Response) => {
       const evalRes = await client.chat.completions.create({
         model: MODEL,
         messages: [
-          { role: "system", content: evaluator_prompt },
+          { role: "system", content: evaluator_prompt + EVALUATOR_COLLEGE_EXCLUSION },
           { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n\nCandidate signal JSON:\n\n${JSON.stringify(signalJson)}\n\nReturn your evaluation as JSON.` },
         ],
         response_format: { type: "json_object" },
@@ -831,7 +844,7 @@ router.post("/bulk-eval-stream", async (req: Request, res: Response) => {
       const evalRes = await client.chat.completions.create({
         model: MODEL,
         messages: [
-          { role: "system", content: evaluator_prompt },
+          { role: "system", content: evaluator_prompt + EVALUATOR_COLLEGE_EXCLUSION },
           { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n\nCandidate signal JSON:\n\n${JSON.stringify(candidate.signal_json)}\n\nReturn your evaluation as JSON.` },
         ],
         response_format: { type: "json_object" },
