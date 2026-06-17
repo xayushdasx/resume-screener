@@ -550,7 +550,7 @@ router.post("/bulk-screen-stream", async (req: Request, res: Response) => {
         model: MODEL,
         messages: [
           { role: "system", content: evaluator_prompt },
-          { role: "user", content: `Candidate signal JSON:\n\n${JSON.stringify(signalJson)}\n\nReturn your evaluation as JSON.` },
+          { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n\nCandidate signal JSON:\n\n${JSON.stringify(signalJson)}\n\nReturn your evaluation as JSON.` },
         ],
         response_format: { type: "json_object" },
       });
@@ -719,7 +719,7 @@ router.post("/screen-and-sample", async (req: Request, res: Response) => {
         model: MODEL,
         messages: [
           { role: "system", content: evaluator_prompt },
-          { role: "user", content: `Candidate signal JSON:\n\n${JSON.stringify(signalJson)}\n\nReturn your evaluation as JSON.` },
+          { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n\nCandidate signal JSON:\n\n${JSON.stringify(signalJson)}\n\nReturn your evaluation as JSON.` },
         ],
         response_format: { type: "json_object" },
       });
@@ -811,7 +811,7 @@ router.post("/bulk-eval-stream", async (req: Request, res: Response) => {
         model: MODEL,
         messages: [
           { role: "system", content: evaluator_prompt },
-          { role: "user", content: `Candidate signal JSON:\n\n${JSON.stringify(candidate.signal_json)}\n\nReturn your evaluation as JSON.` },
+          { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n\nCandidate signal JSON:\n\n${JSON.stringify(candidate.signal_json)}\n\nReturn your evaluation as JSON.` },
         ],
         response_format: { type: "json_object" },
       });

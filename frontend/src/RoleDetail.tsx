@@ -384,23 +384,33 @@ export function RoleDetail({
                 No candidates match your filters
               </p>
             ) : (
+              (() => {
+                const seniority: string = (role as any).screenerState?.criteria?.seniority ?? "";
+                const showInternCol = seniority === "intern" || seniority === "junior"
+                  || role.candidates.some(c => (c.internshipMonths ?? 0) > 0);
+                const gridCols = showInternCol
+                  ? "grid-cols-[32px_1fr_72px_96px_1fr_68px_68px_100px_72px_56px]"
+                  : "grid-cols-[32px_1fr_72px_96px_1fr_80px_100px_72px_56px]";
+                const hdrCls = "text-[10px] font-bold uppercase tracking-widest text-neutral-400";
+                return (
               <div className="border border-neutral-200 border-t-0 overflow-hidden">
                 {/* Table header */}
-                <div className="grid grid-cols-[32px_1fr_72px_96px_1fr_80px_100px_72px_56px] px-5 py-2.5 border-b border-neutral-200 bg-neutral-50">
+                <div className={`grid ${gridCols} px-5 py-2.5 border-b border-neutral-200 bg-neutral-50`}>
                   <input
                     type="checkbox"
                     checked={filtered.length > 0 && selected.size === filtered.length}
                     onChange={toggleAll}
                     className="mt-0.5 cursor-pointer"
                   />
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-400">Candidate</span>
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-400 text-center">Rating</span>
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-400 text-center">Status</span>
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-400">Top Reason</span>
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-400 text-center">Exp.</span>
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-400">College</span>
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-400 text-right">Screened</span>
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-400 text-right">Resume</span>
+                  <span className={hdrCls}>Candidate</span>
+                  <span className={`${hdrCls} text-center`}>Rating</span>
+                  <span className={`${hdrCls} text-center`}>Status</span>
+                  <span className={hdrCls}>Top Reason</span>
+                  {showInternCol && <span className={`${hdrCls} text-center`}>Intern Exp.</span>}
+                  <span className={`${hdrCls} text-center`}>{showInternCol ? "FT Exp." : "Exp."}</span>
+                  <span className={hdrCls}>College</span>
+                  <span className={`${hdrCls} text-right`}>Screened</span>
+                  <span className={`${hdrCls} text-right`}>Resume</span>
                 </div>
 
                 {/* Rows */}
@@ -410,6 +420,8 @@ export function RoleDetail({
                     const ratingCls = RATING_CLS[c.aiRating] ?? RATING_CLS.Error;
                     const date = new Date(c.runAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
                     const roleAtCompany = [c.currentRole, c.currentCompany].filter(Boolean).join(" at ");
+                    const fmtMonths = (m: number | null | undefined) => m == null ? "—"
+                      : m < 12 ? `${m}mo` : `${Math.round(m / 12 * 10) / 10} yrs`;
                     const expLabel = c.yearsExperience != null
                       ? c.yearsExperience < 1
                         ? `${Math.round(c.yearsExperience * 12)}mo`
@@ -419,7 +431,7 @@ export function RoleDetail({
                     return (
                       <div
                         key={i}
-                        className={`group grid grid-cols-[32px_1fr_72px_96px_1fr_80px_100px_72px_56px] px-5 py-3.5 items-center transition-colors ${isSelected ? "bg-neutral-50" : "hover:bg-neutral-50/60"}`}
+                        className={`group grid ${gridCols} px-5 py-3.5 items-center transition-colors ${isSelected ? "bg-neutral-50" : "hover:bg-neutral-50/60"}`}
                       >
                         <input
                           type="checkbox"
@@ -464,7 +476,12 @@ export function RoleDetail({
                         </p>
 
                         {/* Exp */}
-                        <p className="text-xs text-neutral-600 font-medium text-center">{expLabel}</p>
+                        {showInternCol && (
+                          <p className="text-xs text-neutral-600 font-medium text-center">{fmtMonths(c.internshipMonths)}</p>
+                        )}
+                        <p className="text-xs text-neutral-600 font-medium text-center">
+                          {showInternCol ? fmtMonths(c.fulltimeMonths) : expLabel}
+                        </p>
 
                         {/* College */}
                         <p className="text-xs text-neutral-500 truncate">
@@ -495,6 +512,7 @@ export function RoleDetail({
                   })}
                 </div>
               </div>
+                ); })()
             )}
 
             {/* Upload more resumes — shown in the New tab */}

@@ -117,7 +117,8 @@ It extracts facts only — zero judgment. The evaluator will do the judging.
 Target output: under 400 tokens.
 
 The compressor_prompt must instruct the model to extract:
-- name, email, phone, total_experience_months, education (degree, institution, year)
+- name, email, phone, total_experience_months, internship_experience_months, fulltime_experience_months, education (degree, institution, year)
+  internship_experience_months: sum of duration_months for any work_history entry whose role title contains "intern", "internship", "trainee", or "apprentice" (case-insensitive). fulltime_experience_months: total_experience_months minus internship_experience_months (minimum 0).
 - work_history: [{company, role, duration_months, key_signals[], ownership_language, impact_evidence}]
   key_signals = 2-4 specific verbatim facts from the resume, not summaries
   ownership_language = verbatim phrase showing ownership ("owned X", "led Y", "built Z end-to-end",
@@ -471,7 +472,7 @@ When the criteria include free-text fields, interpret them as follows:
 - "p1_text": the hiring manager's description of the interview-worthy bar. Use this to populate the ------P1 CRITERIA------ section.
 - "dealbreakers": the hiring manager's description of hard disqualifiers. Use this to populate ------HARD REQUIREMENTS------ and ------RED FLAGS------.
 - "skills": array of relevant skills. Strong match = P0 signal; partial match = P1 signal; complete absence of required skills = Reject trigger if they appear in dealbreakers.
-- "seniority" and "min_experience_months": use to set the ------EXPERIENCE BAR------.
+- "seniority" and "min_experience_months": use to set the ------FULL-TIME EXPERIENCE BAR------.
 
 
 The evaluator prompt you produce will be used by an AI to score resumes as P0 (exceptional), P1 (interview-worthy), or Reject.
@@ -490,7 +491,7 @@ Required sections to produce:
 3. ------EVALUATOR INSTRUCTIONS------  (how to score the signals — write as bullet points, one scoring rule per bullet, NOT as a paragraph)
 4. ------HARD REQUIREMENTS------  (if any field is missing, auto-reject)
    Derive hard requirements from the dealbreakers field. Write each requirement as a short, direct rule — no "What / What counts / What does not count" breakdown. One line per requirement.- EXACTLY BASED ON WHAT THE USER TYPES IN IN THE DEALBREAKERS BOX
-5. ------EXPERIENCE BAR------  (minimum experience thresholds)
+5. ------FULL-TIME EXPERIENCE BAR------  (minimum **full-time** work experience thresholds — internships and part-time do not count unless explicitly noted)
 8. ------SIGNAL QUALITY------  (how to interpret vague or thin resumes)
 9. ------P0 CRITERIA — EXCEPTIONAL------  (reproduce the hiring manager's p0_text faithfully — do NOT add "ALL of these", "any of these", or any threshold modifier. Present the criteria exactly as written.)
 10. ------P1 CRITERIA — INTERVIEW WORTHY------  (reproduce the hiring manager's p1_text faithfully — do NOT add "ALL of these", "any of these", or any threshold modifier. Present the criteria exactly as written.)
@@ -506,7 +507,7 @@ Required sections to produce:
   OVERQUALIFICATION subsection: Include ONLY IF any of these policy fields are present: seniority_mismatch_policy, experience_surplus_policy. If NEITHER is present, omit this subsection entirely — do NOT write "N/A".
   Include only the sub-items whose policy field is present; apply each field's instruction exactly:
   (1) SENIORITY MISMATCH — include only if seniority_mismatch_policy is present. Use its value verbatim as the rejection rule.
-  (2) EXPERIENCE SURPLUS — include only if experience_surplus_policy is present. Use the exact threshold from experience_surplus_policy verbatim — do not substitute or paraphrase the years/months value.
+  (2) **FULL-TIME** EXPERIENCE SURPLUS — include only if experience_surplus_policy is present. Use the exact threshold from experience_surplus_policy verbatim — do not substitute or paraphrase the years/months value. This counts full-time experience only.
 12. ------SCORING RUBRIC------  (decision tree: when to assign P0 vs P1 vs Reject)
 13. ------EVALUATION OUTPUT FORMAT------
 
@@ -580,47 +581,55 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
   const hasPerSection = !!(criteria.p1_education_pedigree || criteria.p0_education_pedigree || criteria.p1_company_pedigree || criteria.p0_company_pedigree);
 
   if (hasPerSection) {
-    // P1 pedigree — hard reject if not met
-    const p1EduPed = toArr(criteria.p1_education_pedigree);
-    const p1CompPed = toArr(criteria.p1_company_pedigree);
-    if (!p1EduPed.includes("no_preference") && p1EduPed.length > 0) {
-      const parts: string[] = [];
-      if (p1EduPed.includes("tier_1")) parts.push(TIER1_COLLEGES);
-      if (p1EduPed.includes("tier_2")) parts.push(TIER2_COLLEGES);
-      expandedCriteria.education_pedigree = `Hard requirement (floor for P1 and P0) — candidate's EITHER bachelor's OR master's degree must be from one of the following institutions: ${parts.join(" or ")}. Candidates who meet NEITHER are rated Reject.`;
+    // Rule: if P0 and P1 have the SAME non-"any" tier chosen → global HARD REQUIREMENT (Reject if not met).
+    // Otherwise each goes into its respective criteria text only (P0 clause in p0_text, P1 clause in p1_text).
+    const effectiveTier = (arr: string[]): "tier_1" | "tier_2" | null =>
+      arr.includes("tier_1") ? "tier_1" : arr.includes("tier_2") ? "tier_2" : null;
+
+    const p0EduTier = effectiveTier(toArr(criteria.p0_education_pedigree));
+    const p1EduTier = effectiveTier(toArr(criteria.p1_education_pedigree));
+    const p0CompTier = effectiveTier(toArr(criteria.p0_company_pedigree));
+    const p1CompTier = effectiveTier(toArr(criteria.p1_company_pedigree));
+
+    const EDU_CLAUSE = (tier: "tier_1" | "tier_2") =>
+      tier === "tier_1" ? TIER1_COLLEGES : TIER2_COLLEGES;
+    const COMP_CLAUSE = (tier: "tier_1" | "tier_2") =>
+      tier === "tier_1" ? TIER1_COMPANIES : TIER2_COMPANIES;
+
+    // ── Education pedigree ────────────────────────────────────────────────────
+    if (p0EduTier && p1EduTier && p0EduTier === p1EduTier) {
+      // Same tier on both → hard reject floor for everyone
+      expandedCriteria.education_pedigree = `Hard requirement: candidate's atleast one formal education degree (Bachelor's or above — B.Tech/B.E./B.S./B.Com/BBA/BA/MBBS/LLB/B.Arch, Master's, or PhD qualify; online certifications, diplomas, or short courses do NOT count) must be from one of: ${EDU_CLAUSE(p0EduTier)}. Candidates who do not meet this are rated Reject.`;
     } else {
       expandedCriteria.education_pedigree = "no_preference";
+      if (p1EduTier) {
+        const clause = `Hard requirement: candidate's atleast one formal education degree (Bachelor's or above — B.Tech/B.E./B.S./B.Com/BBA/BA/MBBS/LLB/B.Arch, Master's, or PhD qualify; online certifications, diplomas, or short courses do NOT count) must be from one of: ${EDU_CLAUSE(p1EduTier)}. Candidates who do not meet this are rated Reject.`;
+        expandedCriteria.p1_text = [expandedCriteria.p1_text || criteria.p1_text, clause].filter(Boolean).join(" ");
+      }
+      if (p0EduTier) {
+        const clause = `For P0, the candidate's atleast one formal education degree (Bachelor's or above — B.Tech/B.E./B.S./B.Com/BBA/BA/MBBS/LLB/B.Arch, Master's, or PhD qualify; online certifications, diplomas, or short courses from these institutions do NOT count) must be from one of: ${EDU_CLAUSE(p0EduTier)}. A candidate who meets all other P0 criteria but lacks this educational background should be rated P1 instead.`;
+        expandedCriteria.p0_text = [expandedCriteria.p0_text || criteria.p0_text, clause].filter(Boolean).join(" ");
+      }
     }
-    if (!p1CompPed.includes("no_preference") && p1CompPed.length > 0) {
-      const parts: string[] = [];
-      if (p1CompPed.includes("tier_1")) parts.push(TIER1_COMPANIES);
-      if (p1CompPed.includes("tier_2")) parts.push(TIER2_COMPANIES);
-      expandedCriteria.company_pedigree = `Hard requirement (floor for P1 and P0) — candidate must have prior experience at: ${parts.join(" or ")}. Candidates without any such experience are rated Reject.`;
+    delete expandedCriteria.p0_education_pedigree;
+    delete expandedCriteria.p1_education_pedigree;
+
+    // ── Company pedigree ──────────────────────────────────────────────────────
+    if (p0CompTier && p1CompTier && p0CompTier === p1CompTier) {
+      // Same tier on both → hard reject floor for everyone
+      expandedCriteria.company_pedigree = `Hard requirement: candidate must have prior full-time work experience at one of: ${COMP_CLAUSE(p0CompTier)}. Candidates without this are rated Reject.`;
     } else {
       expandedCriteria.company_pedigree = "no_preference";
+      if (p1CompTier) {
+        const clause = `Hard requirement: candidate must have prior full-time work experience at one of: ${COMP_CLAUSE(p1CompTier)}. Candidates without this are rated Reject.`;
+        expandedCriteria.p1_text = [expandedCriteria.p1_text || criteria.p1_text, clause].filter(Boolean).join(" ");
+      }
+      if (p0CompTier) {
+        const clause = `For P0, the candidate must have prior full-time work experience at one of: ${COMP_CLAUSE(p0CompTier)}. A candidate who meets all other P0 criteria but lacks this company background should be rated P1 instead.`;
+        expandedCriteria.p0_text = [expandedCriteria.p0_text || criteria.p0_text, clause].filter(Boolean).join(" ");
+      }
     }
-
-    // P0 pedigree — caps rating at P1 if not met
-    const p0EduPed = toArr(criteria.p0_education_pedigree);
-    const p0CompPed = toArr(criteria.p0_company_pedigree);
-    if (!p0EduPed.includes("no_preference") && p0EduPed.length > 0) {
-      const parts: string[] = [];
-      if (p0EduPed.includes("tier_1")) parts.push(TIER1_COLLEGES);
-      if (p0EduPed.includes("tier_2")) parts.push(TIER2_COLLEGES);
-      expandedCriteria.p0_education_pedigree = `P0 education bar — to be rated P0, candidate's EITHER bachelor's OR master's degree must be from: ${parts.join(" or ")}. Candidates who otherwise qualify for P0 but lack this education background should be rated P1 instead.`;
-    } else {
-      delete expandedCriteria.p0_education_pedigree;
-    }
-    if (!p0CompPed.includes("no_preference") && p0CompPed.length > 0) {
-      const parts: string[] = [];
-      if (p0CompPed.includes("tier_1")) parts.push(TIER1_COMPANIES);
-      if (p0CompPed.includes("tier_2")) parts.push(TIER2_COMPANIES);
-      expandedCriteria.p0_company_pedigree = `P0 company bar — to be rated P0, candidate must have prior experience at: ${parts.join(" or ")}. Candidates who otherwise qualify for P0 but lack this company background should be rated P1 instead.`;
-    } else {
-      delete expandedCriteria.p0_company_pedigree;
-    }
-    // Remove legacy per-section fields not expanded above
-    delete expandedCriteria.p1_education_pedigree;
+    delete expandedCriteria.p0_company_pedigree;
     delete expandedCriteria.p1_company_pedigree;
   } else {
     // Legacy global pedigree fallback
@@ -656,7 +665,7 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
   } else if (expandedCriteria.seniority_mismatch_policy === "reject_overqualified") {
     const isIntern = (expandedCriteria.seniority ?? "").toLowerCase() === "intern";
     expandedCriteria.seniority_mismatch_policy = isIntern
-      ? "REJECT: any full-time candidate (Junior or above) applying for an intern role — intern roles require no prior full-time experience"
+      ? `REJECT: candidate has prior full-time work experience (i.e. any role whose title does NOT contain "intern", "internship", "trainee", or "apprentice" — case-insensitive). These candidates are likely to leave within 6 months and must be rated Reject. EXCEPTION: if the full-time role was Co-founder or Founder of a startup that was clearly started during the candidate's college years (i.e. the role dates overlap with or begin before the candidate has graduated, suggesting a student-era side venture that is likely defunct), disregard that role for this check and evaluate the candidate normally for the intern position.`
       : "REJECT: most recent title is 2+ levels above the target role seniority";
   }
 
@@ -665,12 +674,12 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
   } else if (expandedCriteria.experience_surplus_policy.startsWith("reject_over_")) {
     const years = parseInt(expandedCriteria.experience_surplus_policy.replace("reject_over_", ""), 10);
     if (!isNaN(years) && years > 0) {
-      expandedCriteria.experience_surplus_policy = `REJECT: total experience exceeds ${years} year${years === 1 ? "" : "s"} (${years * 12} months) — indicates level mismatch for this role`;
+      expandedCriteria.experience_surplus_policy = `REJECT: total **full-time** experience exceeds ${years} year${years === 1 ? "" : "s"} (${years * 12} months) — indicates level mismatch for this role`;
     } else {
       delete expandedCriteria.experience_surplus_policy;
     }
   } else if (expandedCriteria.experience_surplus_policy === "reject_overexperienced") {
-    expandedCriteria.experience_surplus_policy = "REJECT: total experience significantly exceeds the role's expected level";
+    expandedCriteria.experience_surplus_policy = "REJECT: total **full-time** experience significantly exceeds the role's expected level";
   }
 
   const EXCLUDE_FIELDS = new Set(["skills_suggestions"]);

@@ -2232,6 +2232,8 @@ export default function App() {
     const sig = (r.signal_json as any) ?? {};
     const latestWork = Array.isArray(sig.work_history) && sig.work_history.length > 0 ? sig.work_history[0] : null;
     const totalMonths: number | null = sig.total_experience_months ?? null;
+    const internMonths: number | null = sig.internship_experience_months ?? null;
+    const ftMonths: number | null = sig.fulltime_experience_months ?? null;
     return {
       filename: r.filename,
       name: r.name ?? r.filename,
@@ -2248,6 +2250,8 @@ export default function App() {
       currentRole: latestWork?.role ?? null,
       currentCompany: latestWork?.company ?? null,
       yearsExperience: totalMonths != null ? Math.round(totalMonths / 12 * 10) / 10 : null,
+      internshipMonths: internMonths,
+      fulltimeMonths: ftMonths,
       runAt: new Date().toISOString(),
     };
   };
@@ -2502,7 +2506,10 @@ export default function App() {
         onOpenRole={id => { setActiveRoleId(id); setAppView("role-detail"); }}
         onDeleteRole={handleDeleteRole}
         onChangeCriteria={(roleId) => {
+          const role = roles.find(r => r.id === roleId)!;
           setActiveRoleId(roleId);
+          resetScreenerState();
+          restoreRoleScreenerState(role);
           setStep(1);
           setAppView("screener");
         }}
@@ -3169,9 +3176,9 @@ export default function App() {
                         )}
                       </motion.div>
 
-                      {/* P1 — only after P0 applied */}
+                      {/* P1 — after P0 applied, or stays if P1 text already entered */}
                       <AnimatePresence>
-                        {criteriaApplied.p0 && (
+                        {(criteriaApplied.p0 || !!criteria?.p1_text) && (
                           <motion.div
                             key="p1-box"
                             initial={{ opacity: 0, y: 8 }}
@@ -3249,9 +3256,9 @@ export default function App() {
                         )}
                       </AnimatePresence>
 
-                      {/* Dealbreakers — only after P1 applied */}
+                      {/* Dealbreakers — after P1 applied, or stays if dealbreakers text already entered */}
                       <AnimatePresence>
-                        {criteriaApplied.p0 && criteriaApplied.p1 && (
+                        {((criteriaApplied.p0 && criteriaApplied.p1) || !!criteria?.dealbreakers) && (
                           <motion.div
                             key="dealbreakers-box"
                             initial={{ opacity: 0, y: 8 }}

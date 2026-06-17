@@ -18,6 +18,8 @@ export interface ATSCandidate {
   currentRole?: string | null;
   currentCompany?: string | null;
   yearsExperience?: number | null;
+  internshipMonths?: number | null;
+  fulltimeMonths?: number | null;
   runAt: string;
 }
 
