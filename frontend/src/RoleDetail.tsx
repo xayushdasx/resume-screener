@@ -3,7 +3,7 @@ import { ArrowLeft, Plus, Users, Award, Trash2, Check, X, Bookmark, ChevronDown,
 import type { ATSRole, ATSCandidate } from "./RolesList";
 
 const isExpText = (s: string) =>
-  /full[- ]?time\s+experience|experience\s+minimum|minimum\s+experience|insufficient\s+experience|\d+\s*months?\s+(of\s+)?experience/i.test(s);
+  /\d+\s*months?|full[- ]?time\s+experience|experience\s+minimum|minimum\s+experience|insufficient\s+experience/i.test(s);
 
 type TabKey = "all" | "new" | "shortlisted" | "rejected" | "saved";
 

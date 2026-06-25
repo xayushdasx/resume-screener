@@ -20,7 +20,7 @@ import { idbSaveFile, idbGetFile } from "./idbFiles";
 
 // Suppress experience-threshold text — date calculation is unreliable, hide from UI
 const isExpText = (s: string) =>
-  /full[- ]?time\s+experience|experience\s+minimum|minimum\s+experience|insufficient\s+experience|\d+\s*months?\s+(of\s+)?experience/i.test(s);
+  /\d+\s*months?|full[- ]?time\s+experience|experience\s+minimum|minimum\s+experience|insufficient\s+experience/i.test(s);
 
 type AppView = "roles" | "create-role" | "role-detail" | "screener";
 
@@ -4048,19 +4048,19 @@ export default function App() {
                       {/* ANALYSIS + FLAGS combined */}
                       <div className="px-6 py-4 flex flex-col gap-2">
                         <p className="text-[10px] font-semibold text-neutral-400 uppercase tracking-widest mb-1">Analysis</p>
-                        {item!.result.rating_result.reject_reason && (
+                        {item!.result.rating_result.reject_reason && !isExpText(item!.result.rating_result.reject_reason) && (
                           <div className="flex gap-2 items-start text-xs text-red-700 bg-red-50 border border-red-100 px-3 py-2 leading-relaxed">
                             <span className="flex-shrink-0 font-bold text-red-400 mt-px">✕</span>
                             <span className="font-semibold">{item!.result.rating_result.reject_reason}</span>
                           </div>
                         )}
-                        {item!.result.rating_result.reasoning.map((r, i) => (
+                        {item!.result.rating_result.reasoning.filter((r: string) => !isExpText(r)).map((r, i) => (
                           <div key={i} className="text-xs text-neutral-600 flex gap-2 leading-relaxed">
                             <span className="text-neutral-300 flex-shrink-0 mt-0.5 font-bold">—</span>
                             <span>{r}</span>
                           </div>
                         ))}
-                        {item!.result.rating_result.concerns.map((c, i) => (
+                        {item!.result.rating_result.concerns.filter((c: string) => !isExpText(c)).map((c, i) => (
                           <div key={`c${i}`} className="flex gap-2 items-start text-xs text-amber-800 bg-amber-50 border border-amber-100 px-3 py-2 leading-relaxed">
                             <span className="flex-shrink-0 font-bold text-amber-400 mt-px">!</span>
                             <span>{c}</span>
@@ -4578,7 +4578,7 @@ export default function App() {
                         </td>
                         <td className="px-6 py-4 text-neutral-600 max-w-md">
                           <span className="text-sm line-clamp-2" title={res.reject_reason ?? (res.reasoning ?? []).join("; ")}>
-                            {res.reject_reason ?? (res.reasoning ?? [])[0] ?? "—"}
+                            {(() => { const t = res.reject_reason ?? (res.reasoning ?? []).find((r: string) => !isExpText(r)) ?? "—"; return isExpText(t) ? "—" : t; })()}
                           </span>
                         </td>
                         <td className="px-4 py-4">
