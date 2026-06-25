@@ -1,4 +1,4 @@
-import type { GeneratePromptResponse, TestResumeResponse, ExtractedParams } from "./types";
+import type { GeneratePromptResponse, TestResumeResponse, ExtractedParams, ScoringParam } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "/api";
 
@@ -235,13 +235,47 @@ export async function* screenAndSampleStream(
 
 export async function buildEvaluatorFromCriteria(
   criteria: object
-): Promise<{ evaluator_prompt?: string; error?: string }> {
+): Promise<{ evaluator_prompt?: string; scoring_params?: ScoringParam[]; scorer_prompt?: string; error?: string }> {
   const res = await fetch(`${BASE}/build-evaluator-prompt`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ criteria }),
   });
   return safeJson(res);
+}
+
+export async function* rankCandidatesStream(
+  candidates: { filename: string; name: string; signal_json: object; rating: string }[],
+  scorerPrompt: string,
+  scoringParams: ScoringParam[]
+): AsyncGenerator<any> {
+  const res = await fetch(`${BASE}/rank-candidates-stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ candidates, scorer_prompt: scorerPrompt, scoring_params: scoringParams }),
+  });
+
+  if (!res.ok || !res.body) {
+    const text = await res.text();
+    throw new Error(text || "Rank candidates stream failed");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        try { yield JSON.parse(line.slice(6)); } catch {}
+      }
+    }
+  }
 }
 
 export interface CompressedView {
@@ -268,6 +302,18 @@ export async function compressEvalPrompt(
     reject: data.reject ?? [],
     background: data.background ?? [],
   };
+}
+
+export async function checkP0P1Similarity(
+  p0_text: string,
+  p1_text: string
+): Promise<{ too_similar: boolean; reason: string }> {
+  const res = await fetch(`${BASE}/check-p0-p1-similarity`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ p0_text, p1_text }),
+  });
+  return safeJson(res);
 }
 
 export async function dynamicTweakPrompt(

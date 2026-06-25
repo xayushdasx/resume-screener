@@ -349,8 +349,8 @@ router.post("/test-resume", async (req: Request, res: Response) => {
     const compressCompletion = await client.chat.completions.create({
       model: "gpt-4.1-mini",
       messages: [
-        { role: "system", content: compressor_prompt },
-        { role: "user", content: `Resume text (return extracted signals as JSON):\n\n${resume_text}` },
+        { role: "system", content: compressor_prompt + `\n\n======= TODAY'S DATE — MANDATORY =======\nToday's exact date is ${new Date().toISOString().slice(0, 10)}.\nFor EVERY work history entry whose end date is "Present", "Current", "Now", "Ongoing", or is absent — calculate duration_months using this date as the end date. DO NOT use any date from the resume text as a proxy for today. DO NOT return null for active roles.` },
+        { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\nResume text (return extracted signals as JSON):\n\n${resume_text}` },
       ],
       response_format: { type: "json_object" },
     });
@@ -510,6 +510,100 @@ router.post("/refine-prompt", async (req: Request, res: Response) => {
   }
 });
 
+const SCORING_PARAMS_PROMPT = `You are a hiring evaluation engineer designing a scoring rubric for candidate ranking.
+
+CONTEXT:
+These scoring parameters are used ONLY for intra-tier ranking — comparing P0s against P0s and P1s against P1s. Reject decisions have already been made. Your job is to design dimensions that capture HOW GOOD a candidate is at the things this role requires — not just whether they qualify.
+
+---
+
+WEIGHT ALLOCATION RULE — READ THIS FIRST:
+The skills and hard requirements listed in "dealbreakers" and "skills" fields describe the CORE technical work of the role. These must collectively hold the MAJORITY of scoring weight (at least 55–65% total). Differentiating signals from p0_text/p1_text (ownership depth, domain experience, AI agent mastery, product sense) share the remaining 35–45%.
+
+Example for a full-stack SDE role with Django/React/Python + AI agents:
+- Full-stack technical depth (React + Python/Django together, or split): ~35–40%
+- AI agent integration depth: ~20–25%
+- Ownership & measurable impact: ~20%
+- Domain / product sense: ~15–20%
+
+Do NOT make AI agents or ownership the single highest-weighted dimension unless the role is explicitly an AI-first role and the dealbreakers say so.
+
+---
+
+HOW TO SCORE EACH DIMENSION — THE DEPTH × BREADTH × SCALE MODEL:
+
+Each dimension should score a candidate on a COMBINATION of:
+1. Duration & volume — how long and how much have they done this (months, number of projects, number of features shipped)
+2. Depth & complexity — what level of problems did they solve (basic CRUD vs complex schema design; simple form vs real-time interactive UI; API wrapper vs production AI agent)
+3. Breadth within the domain — how many sub-skills or sub-problems did they cover (e.g. for frontend: state management + performance + responsive design + API integration + testing)
+4. Scale & outcome — how many users were affected, what was the business impact, what metrics moved and by how much
+
+A score of 10 is NOT just "led features" or "owned cross-functional work." A 10 means: worked on this for substantial time + solved genuinely hard problems + covered broad sub-skills + produced measurable outcomes at real scale.
+A score of 5 means: real experience but limited in at least 2 of the 4 dimensions (e.g. solid depth but small scale, or decent breadth but shallow complexity).
+A score of 0 means: no evidence or only superficial mention.
+
+BAD anchor (vague, abstract):
+  10 = "demonstrated strong ownership of multiple features end-to-end"
+  5 = "some ownership with limited scope"
+  0 = "no ownership signals"
+
+GOOD anchor (specific, observable, multi-dimensional):
+  10 = "shipped 3+ production React features with 50k+ users; complex state (Redux/Zustand/Context), API integration, responsive design; measurable metric (load time, conversion, retention) improved and stated"
+  5 = "1–2 deployed React projects, basic component work, limited to simple pages or internal tools, no user metrics stated"
+  0 = "React listed as skill only, no deployed project evidence, or only tutorial/learning projects"
+
+---
+
+YOUR TASK:
+Produce 4–7 scoring dimensions where:
+1. The core technical skills from dealbreakers/skills fields drive the highest combined weight
+2. Each anchor is written using the depth × breadth × scale model — not just ownership labels
+3. Anchors reference the actual technologies and specifics of THIS role (e.g. "Python/Django backend" not just "backend")
+4. Dimensions are separated — don't have two dimensions that both measure the same thing
+5. Weights sum to exactly 1.0
+
+---
+
+WHAT MAKES A GOOD DIMENSION:
+- Anchors combine at least 2 of: duration, complexity, breadth, scale/outcomes
+- Concrete and role-specific: mentions the actual stack, domain, or metric type relevant to this role
+- Observable from resume signals: work history, project descriptions, stated metrics, skill lists, user/revenue numbers
+
+WHAT MAKES A BAD DIMENSION:
+- Anchors that are just ownership tier labels: "led", "owned", "contributed"
+- Abstract adjectives: "strong", "moderate", "limited"
+- Generic dimensions not tied to the actual role (e.g. "leadership" for an IC engineering role)
+- A single dimension covering both technical depth AND ownership AND scale — split those
+
+---
+
+SCORER PROMPT REQUIREMENTS:
+The scorer_prompt you produce will be used as a system prompt for an LLM that receives a candidate's signal JSON and outputs scores. It must:
+- Open with: "You are scoring a candidate for [role]. Score only on evidence present in the signal JSON. Do not infer or assume."
+- List every parameter with its id, name, and exact 0/5/10 anchor descriptions (written using depth × breadth × scale model)
+- Remind the scorer: "A high score requires evidence of multiple dimensions — duration, complexity, breadth of sub-skills, and scale/outcomes. A long tenure alone does not make a 10. A vague mention of the technology does not make a 5."
+- End with: "Return ONLY valid JSON: { \\"scores\\": { \\"<param_id>\\": <integer 0-10> } }. No explanation. No markdown."
+- Be written so that two different LLMs reading it would produce similar scores for the same candidate
+
+---
+
+OUTPUT:
+Return ONLY valid JSON matching this exact schema. No explanation, no markdown, no preamble.
+
+{
+  "scoring_params": [
+    {
+      "id": "string — short snake_case identifier e.g. fullstack_technical_depth",
+      "name": "string — human readable e.g. Full-Stack Technical Depth",
+      "weight": "number — e.g. 0.30",
+      "score_10_description": "string — multi-dimensional anchor: duration + complexity + breadth + scale/outcomes, role-specific",
+      "score_5_description": "string — present but limited in at least 2 dimensions, role-specific",
+      "score_0_description": "string — absent or superficial mention only"
+    }
+  ],
+  "scorer_prompt": "string — the complete system prompt for the scoring LLM"
+}`;
+
 const BUILD_FROM_CRITERIA_PROMPT = `You are a hiring rubric engineer. Your job is to write a complete, structured evaluator prompt from scratch based on the hiring manager's criteria inputs.
 
 When the criteria include free-text fields, interpret them as follows:
@@ -563,9 +657,9 @@ Return a JSON object with these exact keys:
 {
   "rating": "P0" | "P1" | "Reject",
   "score": integer 0-100 (overall fit),
-  "reject_reason": string or null (required for Reject; single sentence why they fail),
-  "reasoning": [array of strings — 2-3 bullet points, each a single short phrase (max 12 words), explaining the decision],
-  "concerns": [array of strings — 1-2 short phrases (max 10 words each); empty array if none]
+  "reject_reason": string or null (required for Reject; single sentence why they fail), - NEVER RETURN ANYTHING ABOUT MONTHS OR YEARS OF EXPERIENCE OR "Candidate lacks minimum full-time work experience required."- STATEMENTS LIKE ("Full-time experience is only 10 months, below the 60 months minimum requirement." should not come up)
+  "reasoning": [array of strings — 2-3 bullet points, each a single short phrase (max 12 words), explaining the decision] - NEVER RETURN ANYTHING ABOUT MONTHS OR YEARS OF EXPERIENCE OR "Candidate lacks minimum full-time work experience required."- STATEMENTS LIKE ("Full-time experience is only 10 months, below the 60 months minimum requirement." should not come up)
+  "concerns": [array of strings — 1-2 short phrases (max 10 words each); empty array if none] - NEVER RETURN ANYTHING ABOUT MONTHS OR YEARS OF EXPERIENCE OR "Candidate lacks minimum full-time work experience required."- STATEMENTS LIKE ("Full-time experience is only 10 months, below the 60 months minimum requirement." should not come up)
 }
 
 reasoning is REQUIRED for every candidate — never return an empty array. Each bullet must be a tight phrase, not a sentence. No filler, no repetition. Focus on the single most decisive signal per bullet.
@@ -582,6 +676,10 @@ Encode these thresholds explicitly in the SCORING RUBRIC section of the generate
 - P1 threshold: all hard requirements met + candidate demonstrates the P1 criteria as written by the hiring manager.
 - P0 threshold: all hard requirements met + candidate demonstrates the P0 criteria as written by the hiring manager.
 - Do NOT invent "ALL of these" or "any of these" logic on top of what the hiring manager wrote. The P0 and P1 criteria sections are the hiring manager's own words — evaluate against them as written.
+
+When fresher_policy is provided in the criteria:
+- The fresher_policy field contains a pre-computed, ready-to-use instruction. Copy it VERBATIM into the ------FULL-TIME EXPERIENCE BAR------ section of the generated prompt. Do NOT paraphrase, summarize, reinterpret, or add to it.
+- Do NOT add any additional fresher notes, caveats, or restrictions beyond what fresher_policy literally says.
 
 When non_work_weight is provided in the criteria, add a rule in the SIGNAL QUALITY or SCORING RUBRIC section of the generated prompt that applies to any entries flagged as non_work_entries (courses, bootcamps, fellowships, career breaks, research programs):
 - "ignore": Do not count these toward experience at all. If a candidate's only experience is non-work entries, treat them as having zero work experience.
@@ -633,6 +731,17 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
   const expandedCriteria = { ...criteria };
 
   const toArr = (v: any): string[] => Array.isArray(v) ? v : (v ? [v] : ["no_preference"]);
+
+  // Strip "tier2_exception" before effectiveTier calculation — handled separately below
+  const p0EduRaw = toArr(expandedCriteria.p0_education_pedigree);
+  const hasTier2Exception = p0EduRaw.includes("tier2_exception");
+  if (hasTier2Exception) {
+    const cleaned = p0EduRaw.filter((v: string) => v !== "tier2_exception");
+    expandedCriteria.p0_education_pedigree = cleaned.length > 0 && !cleaned.every((v: string) => v === "no_preference")
+      ? cleaned
+      : ["tier_1"];
+  }
+
   const hasPerSection = !!(criteria.p1_education_pedigree || criteria.p0_education_pedigree || criteria.p1_company_pedigree || criteria.p0_company_pedigree);
 
   if (hasPerSection) {
@@ -641,10 +750,10 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
     const effectiveTier = (arr: string[]): "tier_1" | "tier_2" | null =>
       arr.includes("tier_1") ? "tier_1" : arr.includes("tier_2") ? "tier_2" : null;
 
-    const p0EduTier = effectiveTier(toArr(criteria.p0_education_pedigree));
-    const p1EduTier = effectiveTier(toArr(criteria.p1_education_pedigree));
-    const p0CompTier = effectiveTier(toArr(criteria.p0_company_pedigree));
-    const p1CompTier = effectiveTier(toArr(criteria.p1_company_pedigree));
+    const p0EduTier = effectiveTier(toArr(expandedCriteria.p0_education_pedigree));
+    const p1EduTier = effectiveTier(toArr(expandedCriteria.p1_education_pedigree));
+    const p0CompTier = effectiveTier(toArr(expandedCriteria.p0_company_pedigree));
+    const p1CompTier = effectiveTier(toArr(expandedCriteria.p1_company_pedigree));
 
     // Use short placeholders — GPT passes them through as-is, backend replaces
     // with the full verbatim list after generation so the model never paraphrases.
@@ -676,6 +785,14 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
     }
     delete expandedCriteria.p0_education_pedigree;
     delete expandedCriteria.p1_education_pedigree;
+
+    // Override P0 education differentiator when Tier 2 + skills exception is set
+    if (hasTier2Exception) {
+      const skills = ((criteria as any).p0_education_tier2_skills || "").trim();
+      const skillsClause = skills ? `strong evidence of ${skills}` : "exceptional technical depth and accomplishments";
+      expandedCriteria.pedigree_edu_p0_differentiator =
+        `For P0 only (failing this caps the rating at P1, not Reject): Prefer Tier 1 college background (<<TIER1_COLLEGES>>). EXCEPTION: A Tier 2 college candidate (<<TIER2_COLLEGES>>) may also qualify for P0 if they clearly overcompensate with ${skillsClause} — look for concrete, substantial evidence in work history (deployed systems, measurable outcomes, not just skill mentions). Without clear overcompensation evidence, Tier 2 college candidates should be capped at P1.`;
+    }
 
     // ── Company pedigree ──────────────────────────────────────────────────────
     expandedCriteria.company_pedigree = "no_preference";
@@ -714,6 +831,9 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
     }
   }
 
+  // Clean up tier2 exception skill field (consumed above)
+  delete expandedCriteria.p0_education_tier2_skills;
+
   // Transform role-context policy fields: "ignore"/undefined → delete; others → human-readable strings for the LLM
   if (!expandedCriteria.adjacent_roles_policy || expandedCriteria.adjacent_roles_policy === "ignore") {
     delete expandedCriteria.adjacent_roles_policy;
@@ -743,6 +863,33 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
     expandedCriteria.experience_surplus_policy = "REJECT: total **full-time** experience significantly exceeds the role's expected level";
   }
 
+  // Default min_internship_months for intern/junior roles if frontend dropped it (undefined → JSON omits it)
+  const _seniority = (expandedCriteria.seniority ?? "").toLowerCase();
+  if ((_seniority === "intern" || _seniority === "junior") && expandedCriteria.min_internship_months === undefined) {
+    expandedCriteria.min_internship_months = 0;
+  }
+
+  // Pre-compute fresher injection text — injected directly into `built` after generation.
+  // The LLM never places this; we do it with string manipulation for reliability.
+  let fresherInjectionText: string | null = null;
+  if (expandedCriteria.min_internship_months !== undefined) {
+    const minFT: number = expandedCriteria.min_experience_months ?? 0;
+    const minFTLabel = minFT === 0 ? "no minimum" : `${minFT} month${minFT === 1 ? "" : "s"}`;
+    const mim = expandedCriteria.min_internship_months;
+
+    if (mim === "not_applicable") {
+      fresherInjectionText = `\n\nFRESHER EXCEPTION — NOT APPLICABLE FOR THIS ROLE: This role requires prior full-time work experience. Candidates whose ONLY experience is internships, academic projects, or college coursework — with no real full-time employment on their record — must be rated Reject. Full-time work experience is mandatory to be considered.`;
+    } else if (mim === "same_as_fulltime") {
+      fresherInjectionText = `\n\nFRESHER CANDIDATE EXCEPTION: A fresher is a candidate currently enrolled in college OR who graduated within the last 12 months AND has no prior full-time work experience. Fresher candidates are NOT subject to the full-time minimum above — they are evaluated on internship experience instead. The internship bar for freshers matches the full-time bar: internship_experience_months >= ${minFT} months (${minFTLabel}). The full-time experience minimum does NOT apply to freshers. If a fresher has full-time work experience despite being a recent graduate, treat it as a strong P0 positive signal — never reject a fresher solely for having full-time work.`;
+    } else {
+      const n = Number(mim);
+      fresherInjectionText = n === 0
+        ? `\n\nFRESHER CANDIDATE EXCEPTION: A fresher is a candidate currently enrolled in college OR who graduated within the last 12 months AND has no prior full-time work experience. Fresher candidates are NOT subject to the full-time minimum above — they are evaluated on internship experience instead, and for this role there is NO minimum internship requirement. Any amount of internship experience (including zero) qualifies a fresher. The full-time experience minimum does NOT apply to freshers. If a fresher has full-time work experience despite being a recent graduate, treat it as a strong P0 positive signal — never reject a fresher solely for having full-time work.`
+        : `\n\nFRESHER CANDIDATE EXCEPTION: A fresher is a candidate currently enrolled in college OR who graduated within the last 12 months AND has no prior full-time work experience. Fresher candidates are NOT subject to the full-time minimum above — they are evaluated on internship experience instead. The internship bar for freshers is: internship_experience_months >= ${n} month${n === 1 ? "" : "s"}. The full-time experience minimum does NOT apply to freshers. If a fresher has full-time work experience despite being a recent graduate, treat it as a strong P0 positive signal — never reject a fresher solely for having full-time work.`;
+    }
+    delete expandedCriteria.min_internship_months;
+  }
+
   const EXCLUDE_FIELDS = new Set(["skills_suggestions"]);
   const criteriaText = Object.entries(expandedCriteria)
     .filter(([k, v]) => !EXCLUDE_FIELDS.has(k) && v !== "" && v !== null && v !== undefined && v !== false && v !== "no_preference")
@@ -750,18 +897,33 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
     .join("\n");
 
   try {
-    const completion = await client.chat.completions.create({
-      model: "gpt-4.1-mini",
-      messages: [
-        { role: "system", content: BUILD_FROM_CRITERIA_PROMPT },
-        {
-          role: "user",
-          content: `Build a complete evaluator prompt from these hiring manager criteria:\n\n${criteriaText}`,
-        },
-      ],
-    });
+    const [completion, scoringCompletion] = await Promise.all([
+      client.chat.completions.create({
+        model: "gpt-4.1-mini",
+        messages: [
+          { role: "system", content: BUILD_FROM_CRITERIA_PROMPT },
+          {
+            role: "user",
+            content: `Build a complete evaluator prompt from these hiring manager criteria:\n\n${criteriaText}`,
+          },
+        ],
+      }),
+      client.chat.completions.create({
+        model: "gpt-4.1-mini",
+        messages: [
+          { role: "system", content: SCORING_PARAMS_PROMPT },
+          {
+            role: "user",
+            content: `Derive scoring parameters for ranking shortlisted candidates for this role:\n\n${criteriaText}`,
+          },
+        ],
+        response_format: { type: "json_object" },
+      }),
+    ]);
 
     trackCost("Build Evaluator Prompt", "Step 1 — Setup", "gpt-4.1-mini", completion.usage?.prompt_tokens ?? 0, completion.usage?.completion_tokens ?? 0);
+    trackCost("Build Scoring Params", "Step 1 — Setup", "gpt-4.1-mini", scoringCompletion.usage?.prompt_tokens ?? 0, scoringCompletion.usage?.completion_tokens ?? 0);
+
     let built = completion.choices[0].message.content?.trim() ?? "";
     if (!built) {
       return res.status(500).json({ error: "Empty response from model" });
@@ -772,9 +934,39 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
       .replace(/<<TIER2_COLLEGES>>/g, TIER2_COLLEGES)
       .replace(/<<TIER1_COMPANIES>>/g, TIER1_COMPANIES)
       .replace(/<<TIER2_COMPANIES>>/g, TIER2_COMPANIES);
+
+    // Inject fresher exception directly into FULL-TIME EXPERIENCE BAR section (no LLM involvement)
+    if (fresherInjectionText) {
+      const FT_MARKER = "------FULL-TIME EXPERIENCE BAR------";
+      const ftIdx = built.indexOf(FT_MARKER);
+      if (ftIdx !== -1) {
+        // Find start of the next section (next ------...------ marker after this one)
+        const afterFtSection = built.indexOf("------", ftIdx + FT_MARKER.length);
+        if (afterFtSection !== -1) {
+          built = built.slice(0, afterFtSection) + fresherInjectionText + "\n\n" + built.slice(afterFtSection);
+        } else {
+          built = built + fresherInjectionText;
+        }
+      } else {
+        // No FULL-TIME EXPERIENCE BAR section found — append as its own section
+        built = built + "\n\n------FULL-TIME EXPERIENCE BAR — FRESHER EXCEPTION------" + fresherInjectionText;
+      }
+    }
+
     // Always append the college activity exclusion rule so it is visible in the stored prompt
     built = built + EVALUATOR_COLLEGE_EXCLUSION;
-    return res.json({ evaluator_prompt: built });
+
+    let scoring_params: any[] = [];
+    let scorer_prompt: string | undefined;
+    try {
+      const scoringParsed = JSON.parse(scoringCompletion.choices[0].message.content ?? "{}");
+      scoring_params = Array.isArray(scoringParsed.scoring_params) ? scoringParsed.scoring_params : [];
+      scorer_prompt = typeof scoringParsed.scorer_prompt === "string" ? scoringParsed.scorer_prompt : undefined;
+    } catch {
+      // scoring params are optional — don't fail the whole request
+    }
+
+    return res.json({ evaluator_prompt: built, scoring_params, scorer_prompt });
   } catch (e: any) {
     return res.status(500).json({ error: e.message ?? "OpenAI API error" });
   }

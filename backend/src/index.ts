@@ -17,17 +17,8 @@ const PORT = process.env.PORT || 3001;
 // ── Security headers ────────────────────────────────────────────────────────
 app.use(helmet());
 
-// ── CORS — lock to allowed origins in production ────────────────────────────
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(",").map(o => o.trim())
-  : ["http://localhost:5173", "http://localhost:5174"];
-
 app.use(cors({
-  origin: (origin, cb) => {
-    // Allow server-to-server / curl in dev (no origin header)
-    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
-    cb(new Error(`CORS: ${origin} not allowed`));
-  },
+  origin: true,
   methods: ["GET", "POST", "PUT"],
   allowedHeaders: ["Content-Type"],
 }));
@@ -60,6 +51,7 @@ app.use("/api/recalibrate-prompt", llmLimiter);
 app.use("/api/bulk-screen-stream", llmLimiter);
 app.use("/api/screen-and-sample", llmLimiter);
 app.use("/api/bulk-eval-stream", llmLimiter);
+app.use("/api/rank-candidates-stream", llmLimiter);
 app.use("/api/compress-eval-prompt", llmLimiter);
 app.use("/api/parse-pdf", uploadLimiter);
 

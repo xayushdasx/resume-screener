@@ -2,6 +2,9 @@ import React, { useState, useMemo } from "react";
 import { ArrowLeft, Plus, Users, Award, Trash2, Check, X, Bookmark, ChevronDown, Search, FileText, FlaskConical, Share2, Copy, CheckCheck, Download } from "lucide-react";
 import type { ATSRole, ATSCandidate } from "./RolesList";
 
+const isExpText = (s: string) =>
+  /full[- ]?time\s+experience|experience\s+minimum|minimum\s+experience|insufficient\s+experience|\d+\s*months?\s+(of\s+)?experience/i.test(s);
+
 type TabKey = "all" | "new" | "shortlisted" | "rejected" | "saved";
 
 interface RoleDetailProps {
@@ -87,10 +90,15 @@ export function RoleDetail({
         (c.currentCompany ?? "").toLowerCase().includes(q)
       );
     }
-    return [...list].sort((a, b) =>
-      (RATING_ORDER[a.aiRating] ?? 4) - (RATING_ORDER[b.aiRating] ?? 4)
-    );
-  }, [tabCandidates, ratingFilter, search]);
+    return [...list].sort((a, b) => {
+      if (tab === "shortlisted") {
+        if (a.rank != null && b.rank != null) return a.rank - b.rank;
+        if (a.rank != null) return -1;
+        if (b.rank != null) return 1;
+      }
+      return (RATING_ORDER[a.aiRating] ?? 4) - (RATING_ORDER[b.aiRating] ?? 4);
+    });
+  }, [tabCandidates, tab, ratingFilter, search]);
 
   const newCount = countFor("new");
 
@@ -465,7 +473,7 @@ export function RoleDetail({
 
                         {/* Top reason */}
                         <p className="text-xs text-neutral-500 truncate pr-3">
-                          {c.reason ?? c.reasoning?.[0] ?? "—"}
+                          {(() => { const r = c.reason ?? c.reasoning?.[0] ?? ""; return r && !isExpText(r) ? r : "—"; })()}
                         </p>
 
 

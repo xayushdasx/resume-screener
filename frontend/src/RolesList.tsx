@@ -21,6 +21,8 @@ export interface ATSCandidate {
   internshipMonths?: number | null;
   fulltimeMonths?: number | null;
   runAt: string;
+  rank?: number | null;
+  composite_score?: number | null;
 }
 
 export interface ATSRole {

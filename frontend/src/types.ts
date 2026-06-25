@@ -4,6 +4,15 @@ export interface HardRequirement {
   what_does_not_count: string;
 }
 
+export interface ScoringParam {
+  id: string;
+  name: string;
+  weight: number;
+  score_10_description: string;
+  score_5_description: string;
+  score_0_description: string;
+}
+
 export interface ExtractedParams {
   role_title: string;
   role_family:
@@ -30,6 +39,8 @@ export interface GeneratePromptResponse {
   extracted_params: ExtractedParams;
   compressor_prompt: string;
   evaluator_prompt: string;
+  scoring_params?: ScoringParam[];
+  scorer_prompt?: string;
   error?: string;
   raw_response?: string;
 }

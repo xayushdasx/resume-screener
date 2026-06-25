@@ -140,6 +140,14 @@ function logCostSummary(label: string, resumes: number, inputTokens: number, out
   console.log(`└${"─".repeat(55)}\n`);
 }
 
+// Returns a hard date instruction appended to the compressor system message.
+// Injecting it here (not just in the user turn) prevents the model from using
+// resume dates as a proxy for "today" when calculating present-role durations.
+function todayDateInstruction(): string {
+  const today = new Date().toISOString().slice(0, 10);
+  return `\n\n======= TODAY'S DATE — MANDATORY =======\nToday's exact date is ${today}.\nFor EVERY work history entry whose end date is "Present", "Current", "Now", "Ongoing", or is absent — you MUST calculate duration_months using ${today} as the end date.\nDO NOT use any date found inside the resume text as a substitute for today's date.\nDO NOT leave duration_months null or 0 for active/ongoing roles.\nFormula (inclusive): (end_year - start_year) * 12 + (end_month - start_month) + 1, where end = ${today}.`;
+}
+
 // Worker-pool: runs fn on every item with at most `concurrency` in flight at once.
 async function runConcurrent<T>(
   items: T[],
@@ -419,14 +427,15 @@ router.post("/generate-clarifying-questions", async (req: Request, res: Response
   let client: OpenAI;
   try { client = getClient(); } catch (e: any) { return res.status(500).json({ error: e.message }); }
 
+  const truncate = (s: string | undefined, max: number) => (s?.trim() ?? "").slice(0, max) || "Not provided";
   const filled = CLARIFYING_QUESTIONS_PROMPT
     .replace("{role_title}", role_title ?? "Not specified")
     .replace("{role_family}", role_family ?? "Not specified")
     .replace("{source_role}", source_role ?? "Not specified")
     .replace("{seniority}", seniority ?? "Not specified")
     .replace("{min_experience_months}", String(min_experience_months ?? 0))
-    .replace("{source_context}", source_context?.trim() || "Not provided")
-    .replace("{jd_context}", jd_context?.trim() || "Not provided")
+    .replace("{source_context}", truncate(source_context, 600))
+    .replace("{jd_context}", truncate(jd_context, 600))
     .replace("{p0_text}", p0_text?.trim() || "Not provided")
     .replace("{p1_text}", p1_text?.trim() || "Not provided")
     .replace("{dealbreakers}", dealbreakers?.trim() || "Not provided")
@@ -438,6 +447,7 @@ router.post("/generate-clarifying-questions", async (req: Request, res: Response
       messages: [{ role: "user", content: filled }],
       response_format: { type: "json_object" },
       max_tokens: 800,
+      temperature: 0,
     });
     const raw = completion.choices[0].message.content ?? "{}";
     const parsed = JSON.parse(raw);
@@ -447,6 +457,36 @@ router.post("/generate-clarifying-questions", async (req: Request, res: Response
     });
   } catch (e: any) {
     return res.status(500).json({ error: e.message ?? "Failed to generate questions" });
+  }
+});
+
+router.post("/check-p0-p1-similarity", async (req: Request, res: Response) => {
+  const { p0_text, p1_text } = req.body as { p0_text?: string; p1_text?: string };
+  if (!p0_text?.trim() || !p1_text?.trim()) return res.json({ too_similar: false, reason: "" });
+
+  let client: OpenAI;
+  try { client = getClient(); } catch (e: any) { return res.status(500).json({ error: e.message }); }
+
+  const prompt = `P0 (Strong Hire bar): "${p0_text.trim()}"
+
+P1 (Potential Hire bar): "${p1_text.trim()}"
+
+Are these two hiring criteria tiers too similar? "Too similar" means: a candidate who clearly passes P1 would almost always pass P0 too — i.e., P0 adds no meaningful differentiation and the two tiers are effectively the same bar. Because P0 means it is a much higher criteria than what P1 is, we do not want candidates who are passing P1 to automatically pass the P0 criteria too. Because P0 are like the star candidates.
+
+Return JSON: { "too_similar": true or false, "reason": "one short sentence explaining why (or why not)" }`;
+
+  try {
+    const completion = await client.chat.completions.create({
+      model: "gpt-4.1-mini",
+      messages: [{ role: "user", content: prompt }],
+      response_format: { type: "json_object" },
+      max_tokens: 80,
+      temperature: 0,
+    });
+    const parsed = JSON.parse(completion.choices[0].message.content ?? "{}");
+    return res.json({ too_similar: !!parsed.too_similar, reason: parsed.reason ?? "" });
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message ?? "Similarity check failed" });
   }
 });
 
@@ -513,6 +553,7 @@ router.post("/recalibrate-prompt", async (req: Request, res: Response) => {
         },
       ],
       response_format: { type: "json_object" },
+      temperature: 0,
     });
 
     trackCost("Recalibrate Prompt", "Taste Check", "gpt-4.1-mini", completion.usage?.prompt_tokens ?? 0, completion.usage?.completion_tokens ?? 0);
@@ -570,10 +611,11 @@ router.post("/bulk-screen-stream", async (req: Request, res: Response) => {
       const compressRes = await client.chat.completions.create({
         model: MODEL,
         messages: [
-          { role: "system", content: compressor_prompt + "\n\n" + COLLEGE_ACTIVITY_EXCLUSION },
+          { role: "system", content: compressor_prompt + "\n\n" + COLLEGE_ACTIVITY_EXCLUSION + todayDateInstruction() },
           { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n${PEDIGREE_CONTEXT}\nResume text (return extracted signals as JSON):\n\n${resume.text}` },
         ],
         response_format: { type: "json_object" },
+        temperature: 0,
       });
       totalInput  += compressRes.usage?.prompt_tokens     ?? 0;
       totalOutput += compressRes.usage?.completion_tokens ?? 0;
@@ -587,6 +629,7 @@ router.post("/bulk-screen-stream", async (req: Request, res: Response) => {
           { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n\nCandidate signal JSON:\n\n${JSON.stringify(signalJson)}\n\nReturn your evaluation as JSON.` },
         ],
         response_format: { type: "json_object" },
+        temperature: 0,
       });
       totalInput  += evalRes.usage?.prompt_tokens     ?? 0;
       totalOutput += evalRes.usage?.completion_tokens ?? 0;
@@ -739,10 +782,11 @@ router.post("/screen-and-sample", async (req: Request, res: Response) => {
       const compressRes = await client.chat.completions.create({
         model: MODEL,
         messages: [
-          { role: "system", content: compressor_prompt + "\n\n" + COLLEGE_ACTIVITY_EXCLUSION },
+          { role: "system", content: compressor_prompt + "\n\n" + COLLEGE_ACTIVITY_EXCLUSION + todayDateInstruction() },
           { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n${PEDIGREE_CONTEXT}\nResume text (return extracted signals as JSON):\n\n${resume.text}` },
         ],
         response_format: { type: "json_object" },
+        temperature: 0,
       });
       totalInput  += compressRes.usage?.prompt_tokens     ?? 0;
       totalOutput += compressRes.usage?.completion_tokens ?? 0;
@@ -756,6 +800,7 @@ router.post("/screen-and-sample", async (req: Request, res: Response) => {
           { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n\nCandidate signal JSON:\n\n${JSON.stringify(signalJson)}\n\nReturn your evaluation as JSON.` },
         ],
         response_format: { type: "json_object" },
+        temperature: 0,
       });
       totalInput  += evalRes.usage?.prompt_tokens     ?? 0;
       totalOutput += evalRes.usage?.completion_tokens ?? 0;
@@ -848,6 +893,7 @@ router.post("/bulk-eval-stream", async (req: Request, res: Response) => {
           { role: "user", content: `Today's date: ${new Date().toISOString().slice(0, 10)}\n\nCandidate signal JSON:\n\n${JSON.stringify(candidate.signal_json)}\n\nReturn your evaluation as JSON.` },
         ],
         response_format: { type: "json_object" },
+        temperature: 0,
       });
       totalInput  += evalRes.usage?.prompt_tokens     ?? 0;
       totalOutput += evalRes.usage?.completion_tokens ?? 0;
@@ -894,6 +940,91 @@ router.post("/bulk-eval-stream", async (req: Request, res: Response) => {
 
   logCostSummary("RE-EVALUATION (post-recalibration)", total, totalInput, totalOutput, MODEL);
   trackCost("Re-evaluate Batch", "Taste Check", MODEL, totalInput, totalOutput, total);
+  sendEvent({ type: "done", total });
+  res.end();
+});
+
+router.post("/rank-candidates-stream", async (req: Request, res: Response) => {
+  const { candidates, scorer_prompt, scoring_params } = req.body as {
+    candidates: { filename: string; name: string; signal_json: object; rating: string }[];
+    scorer_prompt: string;
+    scoring_params: { id: string; name: string; weight: number }[];
+  };
+
+  if (!candidates?.length || !scorer_prompt || !scoring_params?.length) {
+    return res.status(400).json({ error: "candidates, scorer_prompt, and scoring_params are required." });
+  }
+
+  let client: OpenAI;
+  try { client = getClient(); } catch (e: any) { return res.status(500).json({ error: e.message }); }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  const shortlisted = candidates.filter(c => c.rating === "P0" || c.rating === "P1");
+  const total = shortlisted.length;
+  const sendEvent = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  sendEvent({ type: "start", total });
+
+  const MODEL = "gpt-4.1-mini";
+  let totalInput = 0;
+  let totalOutput = 0;
+  let completed = 0;
+
+  type ScoredCandidate = { filename: string; name: string; rating: string; composite_score: number; raw_scores: Record<string, number> };
+  const scored: ScoredCandidate[] = [];
+
+  await runConcurrent(shortlisted, CONCURRENCY, async (candidate) => {
+    try {
+      const scoreRes = await client.chat.completions.create({
+        model: MODEL,
+        messages: [
+          { role: "system", content: scorer_prompt },
+          { role: "user", content: `Candidate signal JSON:\n\n${JSON.stringify(candidate.signal_json)}\n\nReturn ONLY valid JSON in this exact format (fill in the integer scores 0-10, no other keys):\n{\n  "scores": {\n${scoring_params.map(p => `    "${p.id}": <score for ${p.name}>`).join(',\n')}\n  }\n}` },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0,
+      });
+      totalInput  += scoreRes.usage?.prompt_tokens     ?? 0;
+      totalOutput += scoreRes.usage?.completion_tokens ?? 0;
+
+      let raw_scores: Record<string, number> = {};
+      try {
+        const parsed = JSON.parse(scoreRes.choices[0].message.content ?? "{}");
+        raw_scores = (parsed.scores ?? parsed) as Record<string, number>;
+      } catch { /* keep empty */ }
+
+      // Weighted composite: sum(score_i * weight_i) * 10 → 0-100
+      const composite_score = Math.round(
+        scoring_params.reduce((sum, p) => {
+          const s = typeof raw_scores[p.id] === "number" ? Math.max(0, Math.min(10, raw_scores[p.id])) : 0;
+          return sum + s * p.weight;
+        }, 0) * 10
+      );
+
+      completed++;
+      const entry: ScoredCandidate = { filename: candidate.filename, name: candidate.name, rating: candidate.rating, composite_score, raw_scores };
+      scored.push(entry);
+      sendEvent({ type: "scored", completed, total, filename: candidate.filename, composite_score });
+    } catch (e: any) {
+      completed++;
+      sendEvent({ type: "scored", completed, total, filename: candidate.filename, composite_score: 0, error: e.message });
+    }
+  });
+
+  // Rank: P0s sorted desc → 1..N; P1s sorted desc → N+1..N+M
+  const p0s = scored.filter(c => c.rating === "P0").sort((a, b) => b.composite_score - a.composite_score);
+  const p1s = scored.filter(c => c.rating === "P1").sort((a, b) => b.composite_score - a.composite_score);
+  const ranked = [
+    ...p0s.map((c, i) => ({ ...c, rank: i + 1 })),
+    ...p1s.map((c, i) => ({ ...c, rank: p0s.length + i + 1 })),
+  ];
+
+  trackCost("Rank Candidates", "Full Pool", MODEL, totalInput, totalOutput, total);
+  sendEvent({ type: "ranked", ranked });
   sendEvent({ type: "done", total });
   res.end();
 });

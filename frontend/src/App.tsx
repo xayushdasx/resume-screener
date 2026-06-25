@@ -13,10 +13,14 @@ import { SendShortlistModal } from "./SendShortlistModal";
 import type { ShortlistEntry } from "./SendShortlistModal";
 import { CreateRole } from "./CreateRole";
 import type { ATSRole, ATSCandidate } from "./RolesList";
-import { generatePrompt, generateJd, uploadPdf, parseEvaluatorPrompt, recalibratePrompt, bulkScreenStream, buildEvaluatorFromCriteria, screenAndSampleStream, bulkEvalStream, dynamicTweakPrompt, compressEvalPrompt, checkCriteriaVagueness, generateClarifyingQuestions, createShare, getShare, updateShare, uploadShareFiles, getShareFileUrl } from "./api";
+import { generatePrompt, generateJd, uploadPdf, parseEvaluatorPrompt, recalibratePrompt, bulkScreenStream, buildEvaluatorFromCriteria, screenAndSampleStream, bulkEvalStream, dynamicTweakPrompt, compressEvalPrompt, checkCriteriaVagueness, generateClarifyingQuestions, createShare, getShare, updateShare, uploadShareFiles, getShareFileUrl, rankCandidatesStream, checkP0P1Similarity } from "./api";
 import type { CompressedView } from "./api";
 import type { GeneratePromptResponse, TestResumeResponse } from "./types";
 import { idbSaveFile, idbGetFile } from "./idbFiles";
+
+// Suppress experience-threshold text — date calculation is unreliable, hide from UI
+const isExpText = (s: string) =>
+  /full[- ]?time\s+experience|experience\s+minimum|minimum\s+experience|insufficient\s+experience|\d+\s*months?\s+(of\s+)?experience/i.test(s);
 
 type AppView = "roles" | "create-role" | "role-detail" | "screener";
 
@@ -221,6 +225,7 @@ interface CriteriaState {
   role_title: string;
   seniority: string;
   min_experience_months: number;
+  min_internship_months?: number | "same_as_fulltime" | "not_applicable";
   p0_text: string;
   p1_text: string;
   dealbreakers: string;
@@ -229,6 +234,7 @@ interface CriteriaState {
   company_pedigree: string[];
   p0_education_pedigree: string[];
   p0_company_pedigree: string[];
+  p0_education_tier2_skills?: string;
   p1_education_pedigree: string[];
   p1_company_pedigree: string[];
   non_work_weight: "ignore" | "weak_signal" | "partial" | "full";
@@ -391,6 +397,7 @@ function checkFieldVagueness(text: string): VaguenessWarning | null {
   return null;
 }
 
+
 function detectVagueness(criteria: CriteriaState): VaguenessWarning[] {
   const warnings: VaguenessWarning[] = [];
   const p0w = checkFieldVagueness(criteria.p0_text);
@@ -430,10 +437,13 @@ function buildInitialCriteria(ep: any): CriteriaState {
   const expMonths = ep.min_experience_months ?? 0;
   const snapped = EXP_OPTIONS.reduce((c, v) => Math.abs(v - expMonths) < Math.abs(c - expMonths) ? v : c, 0);
 
+  const seniority = (ep.seniority ?? "mid").toLowerCase();
+  const isFresherRole = seniority === "intern" || seniority === "junior";
   return {
     role_title: ep.role_title ?? "",
-    seniority: ep.seniority ?? "mid",
-    min_experience_months: snapped,
+    seniority: seniority,
+    min_experience_months: seniority === "intern" ? 0 : snapped,
+    min_internship_months: isFresherRole ? 0 : undefined,
     p0_text,
     p1_text,
     dealbreakers,
@@ -680,30 +690,34 @@ function ClarifyingQuestionsModal({
   onSubmit: (answers: Record<string, string>) => void;
   onSkip: () => void;
 }) {
-  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [freeTextOpen, setFreeTextOpen] = useState<Record<string, boolean>>({});
   const [freeText, setFreeText] = useState<Record<string, string>>({});
 
   const FIELD_META: Record<string, { label: string; labelCls: string; selectedCls: string }> = {
     p0:           { label: "P0",           labelCls: "text-emerald-700", selectedCls: "bg-emerald-700 border-emerald-700 text-white" },
     p1:           { label: "P1",           labelCls: "text-amber-600",   selectedCls: "bg-amber-600 border-amber-600 text-white"   },
-    dealbreakers: { label: "Dealbreakers", labelCls: "text-rose-600",    selectedCls: "bg-rose-600 border-rose-600 text-white"    },
+    dealbreakers: { label: "Minimum Eligibility Requirement", labelCls: "text-rose-600",    selectedCls: "bg-rose-600 border-rose-600 text-white"    },
   };
 
   const isAnswered = (qId: string) =>
-    (freeTextOpen[qId] && !!freeText[qId]?.trim()) || (!freeTextOpen[qId] && !!answers[qId]);
+    (freeTextOpen[qId] && !!freeText[qId]?.trim()) || (!freeTextOpen[qId] && (answers[qId]?.length ?? 0) > 0);
 
   const allAnswered = questions.every(q => isAnswered(q.id));
 
   const handleSelect = (qId: string, opt: string) => {
-    setAnswers(prev => ({ ...prev, [qId]: opt }));
     setFreeTextOpen(prev => ({ ...prev, [qId]: false }));
+    setAnswers(prev => {
+      const cur = prev[qId] ?? [];
+      const exists = cur.includes(opt);
+      return { ...prev, [qId]: exists ? cur.filter(o => o !== opt) : [...cur, opt] };
+    });
   };
 
   const handleFreeToggle = (qId: string) => {
     setFreeTextOpen(prev => {
       const opening = !prev[qId];
-      if (opening) setAnswers(a => { const c = { ...a }; delete c[qId]; return c; });
+      if (opening) setAnswers(a => ({ ...a, [qId]: [] }));
       return { ...prev, [qId]: opening };
     });
   };
@@ -712,7 +726,7 @@ function ClarifyingQuestionsModal({
     const final: Record<string, string> = {};
     for (const q of questions) {
       if (freeTextOpen[q.id] && freeText[q.id]?.trim()) final[q.id] = freeText[q.id].trim();
-      else if (answers[q.id]) final[q.id] = answers[q.id];
+      else if (answers[q.id]?.length) final[q.id] = answers[q.id].join(" ... AND ... ");
     }
     onSubmit(final);
   };
@@ -736,15 +750,19 @@ function ClarifyingQuestionsModal({
                   {q.context && <p className="text-[11px] text-neutral-400 leading-relaxed">{q.context}</p>}
                 </div>
                 <div className="flex flex-col gap-2">
+                  <p className="text-[10px] text-neutral-400">Select one or more — multiple will be combined with AND</p>
                   {q.options.map(opt => {
-                    const selected = answers[q.id] === opt && !freeTextOpen[q.id];
+                    const selected = !freeTextOpen[q.id] && (answers[q.id] ?? []).includes(opt);
                     return (
                       <button
                         key={opt}
                         onClick={() => handleSelect(q.id, opt)}
-                        className={`text-left text-sm px-4 py-2.5 border transition-colors leading-snug ${selected ? meta.selectedCls : "border-neutral-200 text-neutral-700 hover:border-neutral-400"}`}
+                        className={`text-left text-sm px-4 py-2.5 border transition-colors leading-snug flex items-start gap-2 ${selected ? meta.selectedCls : "border-neutral-200 text-neutral-700 hover:border-neutral-400"}`}
                       >
-                        {opt}
+                        <span className={`mt-0.5 shrink-0 w-3.5 h-3.5 border rounded-sm flex items-center justify-center text-[9px] font-bold ${selected ? "bg-white/20 border-white/40" : "border-neutral-300"}`}>
+                          {selected ? "✓" : ""}
+                        </span>
+                        <span>{opt}</span>
                       </button>
                     );
                   })}
@@ -1318,52 +1336,87 @@ function readCache(): Record<string, any> {
 function ResumeModalOverlay({ url, result, onClose }: { url: string; result: any; onClose: () => void }) {
   const rating: "P0" | "P1" | "Reject" = result?.rating;
   const ratingConfig = {
-    P0: { bg: "bg-emerald-50", text: "text-emerald-700", label: "Strong Hire" },
-    P1: { bg: "bg-amber-50", text: "text-amber-700", label: "Possible Hire" },
-    Reject: { bg: "bg-red-50", text: "text-red-700", label: "Not a Fit" },
-  }[rating] ?? { bg: "bg-slate-50", text: "text-slate-600", label: "" };
+    P0: { bg: "bg-emerald-50", border: "border-emerald-200", text: "text-emerald-700", badge: "bg-emerald-100 text-emerald-800", label: "Strong Hire" },
+    P1: { bg: "bg-amber-50", border: "border-amber-200", text: "text-amber-700", badge: "bg-amber-100 text-amber-800", label: "Possible Hire" },
+    Reject: { bg: "bg-red-50", border: "border-red-200", text: "text-red-700", badge: "bg-red-100 text-red-800", label: "Not a Fit" },
+  }[rating] ?? { bg: "bg-slate-50", border: "border-slate-200", text: "text-slate-600", badge: "bg-slate-100 text-slate-700", label: "" };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
       <div
-        className="relative bg-white shadow-2xl overflow-hidden flex flex-col"
-        style={{ width: "min(900px, 94vw)", height: "92vh" }}
+        className="relative bg-white shadow-2xl overflow-hidden flex flex-row"
+        style={{ width: "min(1160px, 96vw)", height: "92vh" }}
         onClick={e => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-3 border-b border-neutral-200 flex-shrink-0 bg-white">
-          <div className="flex items-center gap-3">
-            <div className="w-7 h-7 bg-neutral-100 flex items-center justify-center flex-shrink-0">
-              <span className="text-xs font-bold text-neutral-600">{(result?.name ?? "?")[0]?.toUpperCase()}</span>
+        {/* ── Left panel: feedback ── */}
+        <div className="w-72 flex-shrink-0 flex flex-col border-r border-neutral-200 bg-white">
+          {/* Name + close */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-200 flex-shrink-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-6 h-6 bg-neutral-100 flex items-center justify-center flex-shrink-0 text-xs font-bold text-neutral-600">
+                {(result?.name ?? "?")[0]?.toUpperCase()}
+              </div>
+              <span className="text-sm font-medium text-neutral-800 truncate">{result?.name ?? "Resume"}</span>
             </div>
-            <span className="text-sm font-medium text-neutral-800">{result?.name ?? "Resume"}</span>
+            <button onClick={onClose} className="flex-shrink-0 ml-2 text-neutral-400 hover:text-neutral-700 transition-colors">
+              <X className="w-4 h-4" />
+            </button>
           </div>
-          <button
-            onClick={onClose}
-            className="flex items-center gap-1.5 text-xs font-medium text-neutral-500 hover:text-neutral-900 border border-neutral-200 hover:border-neutral-400 px-3 py-1.5 transition-colors"
-          >
-            <X className="w-3.5 h-3.5" /> Close
-          </button>
-        </div>
-        {(rating || result?.reject_reason || result?.reasoning?.length || result?.concerns?.length) && (
-          <div className={`flex flex-wrap items-start gap-4 px-5 py-3 border-b border-neutral-100 flex-shrink-0 ${ratingConfig.bg}`}>
-            {rating && (
-              <div className={`flex items-center gap-2 ${ratingConfig.text}`}>
-                <span className="text-sm font-bold">{rating}</span>
-                {ratingConfig.label && <span className="text-xs font-medium opacity-70">— {ratingConfig.label}</span>}
+
+          {/* Rating badge */}
+          {rating && (
+            <div className={`px-4 py-3 border-b ${ratingConfig.border} ${ratingConfig.bg} flex-shrink-0`}>
+              <span className={`inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full ${ratingConfig.badge}`}>
+                {rating} — {ratingConfig.label}
+              </span>
+            </div>
+          )}
+
+          {/* Feedback content — scrollable if long */}
+          <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-4">
+            {result?.reject_reason && !isExpText(result.reject_reason) && (
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-red-500 mb-1.5">Reject Reason</p>
+                <p className="text-xs text-red-700 leading-relaxed">{result.reject_reason}</p>
               </div>
             )}
-            {result?.reject_reason && (
-              <span className="text-xs text-red-700 font-medium">✕ {result.reject_reason}</span>
+            {(result?.reasoning ?? []).filter((r: string) => !isExpText(r)).length > 0 && (
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-neutral-400 mb-1.5">Reasoning</p>
+                <ul className="flex flex-col gap-1.5">
+                  {(result.reasoning as string[]).filter((r: string) => !isExpText(r)).map((r, i) => (
+                    <li key={i} className={`text-xs leading-relaxed ${ratingConfig.text}`}>· {r}</li>
+                  ))}
+                </ul>
+              </div>
             )}
-            {(result?.reasoning ?? []).map((r: string, i: number) => (
-              <span key={i} className={`text-xs font-medium ${ratingConfig.text} opacity-80`}>· {r}</span>
-            ))}
-            {(result?.concerns ?? []).map((c: string, i: number) => (
-              <span key={i} className="text-xs text-amber-700 font-medium bg-amber-50 border border-amber-200 rounded px-2 py-0.5">! {c}</span>
-            ))}
+            {(result?.concerns ?? []).filter((c: string) => !isExpText(c)).length > 0 && (
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-amber-500 mb-1.5">Concerns</p>
+                <ul className="flex flex-col gap-1.5">
+                  {(result.concerns as string[]).filter((c: string) => !isExpText(c)).map((c, i) => (
+                    <li key={i} className="text-xs text-amber-700 leading-relaxed bg-amber-50 border border-amber-200 rounded px-2 py-1">! {c}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {result?.rank != null && (
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-neutral-400 mb-1.5">Rank</p>
+                <p className="text-sm font-bold text-neutral-700">#{result.rank}</p>
+              </div>
+            )}
+            {(result?.email || result?.phone) && (
+              <div className="mt-auto pt-4 border-t border-neutral-100">
+                {result.email && <p className="text-xs text-neutral-500">{result.email}</p>}
+                {result.phone && <p className="text-xs text-neutral-500 mt-0.5">{result.phone}</p>}
+              </div>
+            )}
           </div>
-        )}
-        <PdfViewer url={url} className="flex-1 w-full" style={{ minHeight: 0 }} />
+        </div>
+
+        {/* ── Right panel: PDF viewer ── */}
+        <PdfViewer url={url} className="flex-1" style={{ minHeight: 0, minWidth: 0 }} />
       </div>
     </div>
   );
@@ -1482,6 +1535,9 @@ export default function App() {
   const [bulkUploadTotal, setBulkUploadTotal] = useState(0);
   const [bulkParseFailedNames, setBulkParseFailedNames] = useState<string[]>([]);
   const [manualRatingOverrides, setManualRatingOverrides] = useState<Record<string, "P0" | "P1" | "Reject">>({});
+  const [ranking, setRanking] = useState(false);
+  const [rankingProgress, setRankingProgress] = useState<{ done: number; total: number } | null>(null);
+  const [scorerOpen, setScorerOpen] = useState(false);
   const [originalEvaluatorPrompt, setOriginalEvaluatorPrompt] = useState<string | null>(cache.originalEvaluatorPrompt ?? null);
 
   // Step 1 criteria panel state
@@ -1508,6 +1564,7 @@ export default function App() {
   const [clarifyPendingCriteria, setClarifyPendingCriteria] = useState<CriteriaState | null>(null);
   const [clarifyPendingField, setClarifyPendingField] = useState<"p0" | "p1" | "dealbreakers" | null>(null);
   const [clarifyingField, setClarifyingField] = useState<"p0" | "p1" | "dealbreakers" | null>(null);
+  const [p0p1SimilarityWarning, setP0p1SimilarityWarning] = useState<string | null>(null);
 
   // Evaluator prompt panel state (step 1 left)
   const [promptPanelVisible, setPromptPanelVisible] = useState(false);
@@ -1532,6 +1589,20 @@ export default function App() {
 
   const paramsDataRef = useRef(paramsData);
   useEffect(() => { paramsDataRef.current = paramsData; }, [paramsData]);
+
+  // Debounced P0/P1 similarity check via LLM
+  useEffect(() => {
+    const p0 = criteria?.p0_text ?? "";
+    const p1 = criteria?.p1_text ?? "";
+    if (!p0.trim() || !p1.trim()) { setP0p1SimilarityWarning(null); return; }
+    const timer = setTimeout(async () => {
+      try {
+        const result = await checkP0P1Similarity(p0, p1);
+        setP0p1SimilarityWarning(result.too_similar ? (result.reason || "P0 and P1 criteria are too similar.") : null);
+      } catch { /* ignore network errors */ }
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [criteria?.p0_text, criteria?.p1_text]);
 
   // ── Shared role: load from backend when /role/[token] is in URL ─────────────
   useEffect(() => {
@@ -1731,9 +1802,21 @@ export default function App() {
       if (res.error || !res.evaluator_prompt) {
         setApplyError(res.error ?? "Failed to build evaluator prompt");
       } else {
-        const updated = { ...paramsData, evaluator_prompt: res.evaluator_prompt };
+        const updated = { ...paramsData, evaluator_prompt: res.evaluator_prompt, scoring_params: res.scoring_params, scorer_prompt: res.scorer_prompt };
         setParamsData(updated);
         paramsDataRef.current = updated;
+        // Reset taste checker — criteria changed, old verdicts are stale
+        setTasteResults([]);
+        setParsedResumes([]);
+        setTasteResumes([]);
+        setCurrentBatchFilenames([]);
+        setEvaluatedFilenames(new Set());
+        setTasteParseErrorCount(0);
+        setTasteCandidatePool([]);
+        setReviewIndex(0);
+        setBulkResults([]);
+        setRanking(false);
+        setRankingProgress(null);
         setOriginalEvaluatorPrompt(res.evaluator_prompt);
         setPromptPanelVisible(true);
         setPromptEditMode(false);
@@ -1753,6 +1836,60 @@ export default function App() {
       setApplyError(e.message ?? "Request failed");
     } finally {
       setApplyLoading(false);
+    }
+  };
+
+  const runRanking = async (finalResults: any[]) => {
+    const params = paramsDataRef.current;
+    if (!params?.scoring_params?.length || !params?.scorer_prompt) return;
+    const shortlisted = finalResults.filter(r => r.rating === "P0" || r.rating === "P1");
+    if (shortlisted.length === 0) return;
+
+    setRanking(true);
+    setRankingProgress({ done: 0, total: shortlisted.length });
+    const MAX_RETRIES = 3;
+    let retries = 0;
+    let rankSuccess = false;
+    try {
+      const candidates = shortlisted.map(r => ({
+        filename: r.filename,
+        name: r.name,
+        signal_json: r.signal_json ?? {},
+        rating: r.rating,
+      }));
+      while (!rankSuccess && retries <= MAX_RETRIES) {
+        try {
+          const stream = rankCandidatesStream(candidates, params.scorer_prompt, params.scoring_params);
+          for await (const event of stream) {
+            if (event.type === "scored") {
+              setRankingProgress({ done: event.completed, total: event.total });
+            } else if (event.type === "ranked") {
+              const rankMap = new Map<string, { rank: number; composite_score: number; raw_scores: Record<string, number> }>();
+              for (const entry of (event.ranked ?? [])) {
+                rankMap.set(entry.filename, { rank: entry.rank, composite_score: entry.composite_score, raw_scores: entry.raw_scores ?? {} });
+              }
+              setBulkResults(prev => prev.map(r => {
+                const ranked = rankMap.get(r.filename);
+                if (!ranked) return r;
+                return { ...r, rank: ranked.rank, composite_score: ranked.composite_score, raw_scores: ranked.raw_scores };
+              }));
+              rankSuccess = true;
+            }
+          }
+          break;
+        } catch (streamErr: any) {
+          retries++;
+          if (retries > MAX_RETRIES) break;
+          console.warn(`[ranking] stream interrupted — retry ${retries}/${MAX_RETRIES}`);
+          setRankingProgress({ done: 0, total: shortlisted.length });
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      }
+    } catch (e: any) {
+      console.error("Ranking failed:", e);
+    } finally {
+      setRanking(false);
+      setRankingProgress(null);
     }
   };
 
@@ -1888,21 +2025,39 @@ export default function App() {
     setEvaluatingTaste(true);
     setTasteProgress({ phase: "Evaluating resumes", done: 0, total: batch.length });
 
+    const screened = new Set<string>();
+    const MAX_RETRIES = 3;
+    let retries = 0;
+    let remaining = [...batch];
+
     try {
-      const stream = bulkScreenStream(batch, compressorPrompt, evaluatorPrompt, "TASTE CHECK — Calibration Batch");
-      for await (const event of stream) {
-        if (event.type === "result") {
-          const d = event.data;
-          const tr = toTasteResult(d);
-          setTasteResults(prev => prev.map(r => r.filename === d.filename ? tr : r));
-          setTasteProgress({ phase: "Evaluating resumes", done: event.completed, total: event.total });
-          if (d.signal_json && d.rating !== "Error") {
-            setTasteCandidatePool(prev =>
-              prev.find(c => c.filename === d.filename)
-                ? prev
-                : [...prev, { filename: d.filename, name: d.name, email: d.email ?? null, phone: d.phone ?? null, signal_json: d.signal_json, college_name: (d.signal_json as any)?.college_name, college_tier: (d.signal_json as any)?.college_tier }]
-            );
+      while (remaining.length > 0) {
+        try {
+          const stream = bulkScreenStream(remaining, compressorPrompt, evaluatorPrompt, "TASTE CHECK — Calibration Batch");
+          for await (const event of stream) {
+            if (event.type === "result") {
+              const d = event.data;
+              screened.add(d.filename);
+              const tr = toTasteResult(d);
+              setTasteResults(prev => prev.map(r => r.filename === d.filename ? tr : r));
+              setTasteProgress({ phase: "Evaluating resumes", done: screened.size, total: batch.length });
+              if (d.signal_json && d.rating !== "Error") {
+                setTasteCandidatePool(prev =>
+                  prev.find(c => c.filename === d.filename)
+                    ? prev
+                    : [...prev, { filename: d.filename, name: d.name, email: d.email ?? null, phone: d.phone ?? null, signal_json: d.signal_json, college_name: (d.signal_json as any)?.college_name, college_tier: (d.signal_json as any)?.college_tier }]
+                );
+              }
+            }
           }
+          break;
+        } catch (streamErr: any) {
+          retries++;
+          remaining = remaining.filter(r => !screened.has(r.filename));
+          if (remaining.length === 0 || retries > MAX_RETRIES) break;
+          console.warn(`[taste] stream interrupted — retrying ${remaining.length} remaining (attempt ${retries}/${MAX_RETRIES})`);
+          setTasteProgress({ phase: `Reconnecting… (${remaining.length} left)`, done: screened.size, total: batch.length });
+          await new Promise(resolve => setTimeout(resolve, 2000));
         }
       }
     } finally {
@@ -2089,17 +2244,39 @@ export default function App() {
     setBulkUploadTotal(tasteResumes.length);
     setBulkProgress({ phase: "Screening…", done: 0, total: parsedResumes.length });
 
+    const localResults: any[] = [];
+    const screened = new Set<string>();
+    let remaining = [...parsedResumes];
+    const MAX_RETRIES = 3;
+    let retries = 0;
+
     try {
-      const stream = bulkScreenStream(parsedResumes, currentParams.compressor_prompt, currentParams.evaluator_prompt, "FULL POOL — Screen All");
-      for await (const event of stream) {
-        if (event.type === "result") {
-          setBulkResults(prev => [...prev, event.data]);
-          setBulkProgress({ phase: "Screening", done: event.completed, total: event.total });
+      while (remaining.length > 0) {
+        try {
+          const stream = bulkScreenStream(remaining, currentParams.compressor_prompt, currentParams.evaluator_prompt, "FULL POOL — Screen All");
+          for await (const event of stream) {
+            if (event.type === "result") {
+              screened.add(event.data.filename);
+              localResults.push(event.data);
+              setBulkResults(prev => [...prev, event.data]);
+              setBulkProgress({ phase: "Screening", done: localResults.length, total: parsedResumes.length });
+            }
+          }
+          break; // stream completed normally
+        } catch (streamErr: any) {
+          retries++;
+          remaining = remaining.filter(r => !screened.has(r.filename));
+          if (remaining.length === 0 || retries > MAX_RETRIES) {
+            if (remaining.length > 0) throw streamErr; // exhausted retries
+            break;
+          }
+          console.warn(`[screening] stream interrupted — retrying ${remaining.length} remaining (attempt ${retries}/${MAX_RETRIES})`);
+          setBulkProgress({ phase: `Reconnecting… (${remaining.length} left)`, done: localResults.length, total: parsedResumes.length });
+          await new Promise(resolve => setTimeout(resolve, 2000));
         }
       }
     } catch (err: any) {
       console.error(err);
-      alert(`Bulk screening failed: ${err.message}`);
     } finally {
       setScreening(false);
       setBulkProgress(null);
@@ -2163,16 +2340,38 @@ export default function App() {
 
       setBulkProgress({ phase: `Screening ${parsedResumes.length} resumes…`, done: 0, total: parsedResumes.length });
 
-      const stream = bulkScreenStream(parsedResumes, paramsData.compressor_prompt, paramsData.evaluator_prompt, "FULL POOL — Screen All");
-      for await (const event of stream) {
-        if (event.type === "result") {
-          setBulkResults(prev => [...prev, event.data]);
-          setBulkProgress(prev => prev ? { ...prev, done: event.completed, total: event.total } : prev);
+      const localResults: any[] = [];
+      const screened = new Set<string>();
+      let remaining = [...parsedResumes];
+      const MAX_RETRIES = 3;
+      let retries = 0;
+
+      while (remaining.length > 0) {
+        try {
+          const stream = bulkScreenStream(remaining, paramsData.compressor_prompt, paramsData.evaluator_prompt, "FULL POOL — Screen All");
+          for await (const event of stream) {
+            if (event.type === "result") {
+              screened.add(event.data.filename);
+              localResults.push(event.data);
+              setBulkResults(prev => [...prev, event.data]);
+              setBulkProgress({ phase: "Screening", done: localResults.length, total: parsedResumes.length });
+            }
+          }
+          break; // stream completed normally
+        } catch (streamErr: any) {
+          retries++;
+          remaining = remaining.filter(r => !screened.has(r.filename));
+          if (remaining.length === 0 || retries > MAX_RETRIES) {
+            if (remaining.length > 0) throw streamErr;
+            break;
+          }
+          console.warn(`[screening] stream interrupted — retrying ${remaining.length} remaining (attempt ${retries}/${MAX_RETRIES})`);
+          setBulkProgress({ phase: `Reconnecting… (${remaining.length} left)`, done: localResults.length, total: parsedResumes.length });
+          await new Promise(resolve => setTimeout(resolve, 2000));
         }
       }
     } catch (err: any) {
       console.error(err);
-      alert(`Bulk screening failed: ${err.message}`);
     } finally {
       setScreening(false);
       setBulkProgress(null);
@@ -2203,13 +2402,21 @@ export default function App() {
   const exportCsv = () => {
     if (bulkResults.length === 0) return;
     const escape = (v: string | null | undefined) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const headers = ["Name", "Email", "Phone", "Decision", "AI Decision", "Reason", "Concerns"];
+    const hasRanksForCsv = bulkResults.some(r => r.rank != null);
+    const headers = ["Rank", "Score", "Name", "Email", "Phone", "Decision", "AI Decision", "Reason", "Concerns"];
     const rows = [...bulkResults]
       .sort((a, b) => {
+        if (hasRanksForCsv) {
+          if (a.rank != null && b.rank != null) return a.rank - b.rank;
+          if (a.rank != null) return -1;
+          if (b.rank != null) return 1;
+        }
         const order: Record<string, number> = { P0: 0, P1: 1, Reject: 2, Error: 3 };
         return (order[effectiveRating(a)] ?? 4) - (order[effectiveRating(b)] ?? 4);
       })
       .map(r => [
+        escape(r.rank != null ? String(r.rank) : null),
+        escape(r.composite_score != null ? String(r.composite_score) : null),
         escape(r.name),
         escape(r.email),
         escape(r.phone),
@@ -2394,6 +2601,8 @@ export default function App() {
     setBulkUploadTotal(0);
     setBulkParseFailedNames([]);
     setManualRatingOverrides({});
+    setRanking(false);
+    setRankingProgress(null);
     setOriginalEvaluatorPrompt(null);
     setCriteria(null);
     setCriteriaApplied({ p0: false, p1: false, dealbreakers: false });
@@ -2877,7 +3086,16 @@ export default function App() {
                           <label className="text-xs font-semibold uppercase tracking-widest text-neutral-400">Seniority</label>
                           <select
                             value={criteria.seniority}
-                            onChange={e => updateCriteria(c => ({ ...c, seniority: e.target.value }))}
+                            onChange={e => {
+                              const s = e.target.value;
+                              const isFresher = s === "intern" || s === "junior";
+                              updateCriteria(c => ({
+                                ...c,
+                                seniority: s,
+                                min_experience_months: s === "intern" ? 0 : c.min_experience_months,
+                                min_internship_months: isFresher ? (c.min_internship_months ?? 0) : undefined,
+                              }));
+                            }}
                             className="w-full text-sm pb-2 border-b border-neutral-200 focus:border-emerald-700 outline-none bg-transparent text-neutral-900 cursor-pointer transition-colors"
                           >
                             {["intern", "junior", "mid", "senior", "lead", "principal", "director"].map(v => (
@@ -2885,19 +3103,77 @@ export default function App() {
                             ))}
                           </select>
                         </div>
-                        <div className="flex flex-col gap-1.5">
-                          <label className="text-xs font-semibold uppercase tracking-widest text-neutral-400">Min Experience</label>
+                        {criteria.seniority === "intern" ? (
+                          /* Intern: internship bar replaces full-time bar entirely */
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-xs font-semibold uppercase tracking-widest text-neutral-400">Min Internship Exp</label>
+                            <select
+                              value={String(criteria.min_internship_months ?? 0)}
+                              onChange={e => {
+                                const v = e.target.value;
+                                updateCriteria(c => ({ ...c, min_internship_months: v === "same_as_fulltime" || v === "not_applicable" ? v : Number(v) }));
+                              }}
+                              className="w-full text-sm pb-2 border-b border-neutral-200 focus:border-emerald-700 outline-none bg-transparent text-neutral-900 cursor-pointer transition-colors"
+                            >
+                              <option value="not_applicable">Not applicable — full-time required</option>
+                              <option value="0">No minimum</option>
+                              <option value="1">1 month</option>
+                              <option value="2">2 months</option>
+                              <option value="3">3 months</option>
+                              <option value="6">6 months</option>
+                            </select>
+                          </div>
+                        ) : (
+                          /* Non-intern: full-time bar */
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-xs font-semibold uppercase tracking-widest text-neutral-400">Min Experience</label>
+                            <select
+                              value={criteria.min_experience_months}
+                              onChange={e => updateCriteria(c => ({ ...c, min_experience_months: Number(e.target.value) }))}
+                              className="w-full text-sm pb-2 border-b border-neutral-200 focus:border-emerald-700 outline-none bg-transparent text-neutral-900 cursor-pointer transition-colors"
+                            >
+                              {EXP_OPTIONS.map(m => (
+                                <option key={m} value={m}>{formatExpMonths(m)}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                      {/* Junior: also show internship bar for fresher candidates */}
+                      {criteria.seniority === "junior" && (
+                        <div className="flex flex-col gap-1.5 pt-1">
+                          <label className="text-xs font-semibold uppercase tracking-widest text-neutral-400">
+                            Fresher / Internship Bar
+                            <span className="ml-1.5 text-neutral-300 font-normal normal-case tracking-normal">for candidates fresh out of college</span>
+                          </label>
                           <select
-                            value={criteria.min_experience_months}
-                            onChange={e => updateCriteria(c => ({ ...c, min_experience_months: Number(e.target.value) }))}
+                            value={String(criteria.min_internship_months ?? 0)}
+                            onChange={e => {
+                              const v = e.target.value;
+                              updateCriteria(c => ({ ...c, min_internship_months: v === "same_as_fulltime" || v === "not_applicable" ? v : Number(v) }));
+                            }}
                             className="w-full text-sm pb-2 border-b border-neutral-200 focus:border-emerald-700 outline-none bg-transparent text-neutral-900 cursor-pointer transition-colors"
                           >
-                            {EXP_OPTIONS.map(m => (
-                              <option key={m} value={m}>{formatExpMonths(m)}</option>
-                            ))}
+                            <option value="not_applicable">Not applicable — freshers must have full-time exp</option>
+                            <option value="0">No minimum — any fresher is fine</option>
+                            <option value="1">1 month internship</option>
+                            <option value="2">2 months internship</option>
+                            <option value="3">3 months internship</option>
+                            <option value="6">6 months internship</option>
+                            <option value="same_as_fulltime">Same as full-time bar</option>
                           </select>
+                          <p className="text-[10px] text-neutral-400 leading-relaxed">
+                            {criteria.min_internship_months === "not_applicable"
+                              ? "Freshers with only internship experience will be rejected. Full-time work is required."
+                              : criteria.min_internship_months === "same_as_fulltime"
+                              ? `Freshers need at least ${formatExpMonths(criteria.min_experience_months)} of internship experience to qualify.`
+                              : criteria.min_internship_months === 0 || criteria.min_internship_months == null
+                              ? "Freshers with any amount of internship experience qualify. Full-time experience as a fresher is a strong P0 signal."
+                              : `Freshers need at least ${criteria.min_internship_months} month${criteria.min_internship_months === 1 ? "" : "s"} of internship. Full-time experience as a fresher is a strong P0 signal.`
+                            }
+                          </p>
                         </div>
-                      </div>
+                      )}
                     </div>
 
                     {/* Role Fit Signals — shown before editing signals */}
@@ -3128,38 +3404,64 @@ export default function App() {
                           const toggle = (field: "p0_education_pedigree" | "p0_company_pedigree", val: string) => {
                             updateCriteria(c => {
                               const cur = asArr(c[field]);
-                              if (val === "no_preference") return { ...c, [field]: ["no_preference"] };
+                              if (val === "no_preference") return { ...c, [field]: ["no_preference"], ...(field === "p0_education_pedigree" ? { p0_education_tier2_skills: undefined } : {}) };
                               const without = cur.filter(v => v !== "no_preference");
                               const next = without.includes(val) ? without.filter(v => v !== val) : [...without, val];
-                              return { ...c, [field]: next.length ? next : ["no_preference"] };
+                              const result = next.length ? next : ["no_preference"];
+                              if (field === "p0_education_pedigree" && !result.includes("tier2_exception")) {
+                                return { ...c, [field]: result, p0_education_tier2_skills: undefined };
+                              }
+                              return { ...c, [field]: result };
                             });
                             setCriteriaApplied(prev => ({ ...prev, p0: false }));
                           };
-                          const chips = [{ value: "tier_1", label: "Tier 1" }, { value: "tier_2", label: "Tier 2" }, { value: "no_preference", label: "Any" }];
+                          const eduChips = [
+                            { value: "tier_1", label: "Tier 1" },
+                            { value: "tier_2", label: "Tier 2" },
+                            { value: "no_preference", label: "Any" },
+                            { value: "tier2_exception", label: "Tier 2 + skills" },
+                          ];
+                          const compChips = [{ value: "tier_1", label: "Tier 1" }, { value: "tier_2", label: "Tier 2" }, { value: "no_preference", label: "Any" }];
                           const eduArr = asArr(criteria.p0_education_pedigree);
                           const compArr = asArr(criteria.p0_company_pedigree);
+                          const hasTier2Exception = eduArr.includes("tier2_exception");
                           return (
-                            <div className="mt-3 grid grid-cols-2 gap-4">
-                              <div className="flex flex-col gap-1.5">
-                                <span className="text-[10px] font-semibold uppercase tracking-widest text-neutral-400">Education</span>
-                                <div className="flex gap-1.5 flex-wrap">
-                                  {chips.map(opt => (
-                                    <button key={opt.value} onClick={() => toggle("p0_education_pedigree", opt.value)}
-                                      className={`text-[11px] font-medium px-2 py-0.5 border transition-colors ${eduArr.includes(opt.value) ? "bg-emerald-700 border-emerald-700 text-white" : "border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}
-                                    >{opt.label}</button>
-                                  ))}
+                            <div className="mt-3 flex flex-col gap-3">
+                              <div className="grid grid-cols-2 gap-4">
+                                <div className="flex flex-col gap-1.5">
+                                  <span className="text-[10px] font-semibold uppercase tracking-widest text-neutral-400">Education</span>
+                                  <div className="flex gap-1.5 flex-wrap">
+                                    {eduChips.map(opt => (
+                                      <button key={opt.value} onClick={() => toggle("p0_education_pedigree", opt.value)}
+                                        className={`text-[11px] font-medium px-2 py-0.5 border transition-colors ${eduArr.includes(opt.value) ? (opt.value === "tier2_exception" ? "bg-sky-700 border-sky-700 text-white" : "bg-emerald-700 border-emerald-700 text-white") : "border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}
+                                      >{opt.label}</button>
+                                    ))}
+                                  </div>
+                                </div>
+                                <div className="flex flex-col gap-1.5">
+                                  <span className="text-[10px] font-semibold uppercase tracking-widest text-neutral-400">Company</span>
+                                  <div className="flex gap-1.5 flex-wrap">
+                                    {compChips.map(opt => (
+                                      <button key={opt.value} onClick={() => toggle("p0_company_pedigree", opt.value)}
+                                        className={`text-[11px] font-medium px-2 py-0.5 border transition-colors ${compArr.includes(opt.value) ? "bg-emerald-700 border-emerald-700 text-white" : "border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}
+                                      >{opt.label}</button>
+                                    ))}
+                                  </div>
                                 </div>
                               </div>
-                              <div className="flex flex-col gap-1.5">
-                                <span className="text-[10px] font-semibold uppercase tracking-widest text-neutral-400">Company</span>
-                                <div className="flex gap-1.5 flex-wrap">
-                                  {chips.map(opt => (
-                                    <button key={opt.value} onClick={() => toggle("p0_company_pedigree", opt.value)}
-                                      className={`text-[11px] font-medium px-2 py-0.5 border transition-colors ${compArr.includes(opt.value) ? "bg-emerald-700 border-emerald-700 text-white" : "border-neutral-200 text-neutral-500 hover:border-neutral-400"}`}
-                                    >{opt.label}</button>
-                                  ))}
+                              {hasTier2Exception && (
+                                <div className="flex flex-col gap-1">
+                                  <span className="text-[10px] text-sky-700 font-semibold">Skills that compensate for Tier 2 college</span>
+                                  <input
+                                    type="text"
+                                    value={criteria.p0_education_tier2_skills ?? ""}
+                                    onChange={e => { updateCriteria(c => ({ ...c, p0_education_tier2_skills: e.target.value })); setCriteriaApplied(prev => ({ ...prev, p0: false })); }}
+                                    placeholder="e.g. React, Django, production ML pipelines"
+                                    className="w-full text-xs border border-sky-200 focus:border-sky-500 outline-none px-2.5 py-1.5 text-neutral-700"
+                                  />
+                                  <p className="text-[10px] text-neutral-400 leading-relaxed">Tier 1 is preferred; a Tier 2 candidate qualifies for P0 only if they clearly demonstrate these skills in their work history.</p>
                                 </div>
-                              </div>
+                              )}
                             </div>
                           );
                         })()}
@@ -3241,6 +3543,16 @@ export default function App() {
                                 </div>
                               );
                             })()}
+                            {/* P0/P1 similarity warning (LLM-based, debounced) */}
+                            {p0p1SimilarityWarning && (
+                              <div className="mt-3 flex items-start gap-2 bg-amber-50 border border-amber-300 p-3">
+                                <span className="text-amber-600 text-sm font-bold shrink-0 leading-none mt-0.5">⚠</span>
+                                <div>
+                                  <p className="text-xs font-semibold text-amber-800">P0 and P1 overlap — your tiers won't separate</p>
+                                  <p className="text-xs text-amber-700 mt-0.5 leading-relaxed">Anyone clearing P1 will also clear P0, there is no real differentiation. Either tighten P0 to a higher bar, or loosen P1 so candidates with one clear gap can still qualify.</p>
+                                </div>
+                              </div>
+                            )}
                             {!criteriaApplied.p1 && (
                               <div className="mt-3 flex justify-end">
                                 <button
@@ -3269,7 +3581,7 @@ export default function App() {
                           >
                             <div className="flex items-center justify-between mb-2">
                               <div className="text-sm font-medium text-rose-900 flex items-center gap-2">
-                                Dealbreakers <span className="text-xs text-neutral-400 font-normal">— Red Flags</span>
+                                Minimum Eligibility Requirement
                               </div>
                               {criteriaApplied.dealbreakers && <span className="flex items-center gap-1 text-xs font-medium text-rose-600"><Check className="w-3 h-3" /> Applied</span>}
                             </div>
@@ -4126,24 +4438,75 @@ export default function App() {
             )}
 
 
-            {bulkResults.length > 0 && (
+            {paramsData?.scorer_prompt && (
+              <div className="border border-neutral-200 overflow-hidden mb-3">
+                <button
+                  onClick={() => setScorerOpen(v => !v)}
+                  className="w-full flex items-center justify-between px-5 py-2.5 text-xs text-neutral-400 hover:text-neutral-600 hover:bg-neutral-50 transition-colors bg-white"
+                >
+                  <span className="font-medium">Scoring criteria ({paramsData.scoring_params?.length ?? 0} parameters)</span>
+                  {scorerOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                </button>
+                {scorerOpen && (
+                  <div className="px-5 pb-4 pt-1 bg-neutral-50 border-t border-neutral-100">
+                    {(paramsData.scoring_params ?? []).length > 0 && (
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {(paramsData.scoring_params ?? []).map((p: any) => (
+                          <span key={p.id} className="text-[11px] bg-white border border-neutral-200 px-2 py-0.5 rounded text-neutral-600">
+                            <span className="font-medium">{p.name}</span> <span className="text-neutral-400">×{p.weight}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <details>
+                      <summary className="text-[11px] text-neutral-400 cursor-pointer hover:text-neutral-600 select-none">View scorer prompt</summary>
+                      <pre className="mt-2 text-[10px] text-neutral-600 bg-white border border-neutral-200 rounded p-3 overflow-x-auto whitespace-pre-wrap max-h-48 overflow-y-auto">{paramsData.scorer_prompt}</pre>
+                    </details>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {bulkResults.length > 0 && (() => {
+              const hasRanks = bulkResults.some(r => r.rank != null);
+              const showRankColumn = hasRanks || ranking;
+              const shortlistCount = bulkResults.filter(r => r.rating === "P0" || r.rating === "P1").length;
+              return (
               <div className="border border-neutral-200 overflow-hidden">
                 <div className="px-5 py-3 border-b border-neutral-100 bg-neutral-50 flex items-center justify-between">
-                  <span className="text-xs font-semibold text-neutral-500 uppercase tracking-widest">
-                    {bulkResults.length} candidate{bulkResults.length !== 1 ? "s" : ""}
-                    {screening && bulkProgress ? ` — ${bulkProgress.total - bulkResults.length} remaining` : ""}
-                    {!screening && bulkParseErrorCount > 0 ? ` · ${bulkParseErrorCount} skipped` : ""}
-                  </span>
-                  <button
-                    onClick={exportCsv}
-                    className="flex items-center gap-1.5 text-xs text-neutral-500 hover:text-neutral-900 transition-colors"
-                  >
-                    <Download className="w-3.5 h-3.5" /> Export CSV
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs font-semibold text-neutral-500 uppercase tracking-widest">
+                      {bulkResults.length} candidate{bulkResults.length !== 1 ? "s" : ""}
+                      {screening && bulkProgress ? ` — ${bulkProgress.total - bulkResults.length} remaining` : ""}
+                      {!screening && bulkParseErrorCount > 0 ? ` · ${bulkParseErrorCount} skipped` : ""}
+                    </span>
+                    {ranking && rankingProgress && (
+                      <span className="text-xs text-sky-600 animate-pulse">
+                        Ranking {rankingProgress.done}/{rankingProgress.total}…
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {!screening && !ranking && !hasRanks && shortlistCount > 0 && paramsData?.scorer_prompt && (
+                      <button
+                        onClick={() => runRanking(bulkResults)}
+                        className="flex items-center gap-1.5 text-xs font-medium text-sky-600 hover:text-sky-800 border border-sky-200 hover:border-sky-400 bg-sky-50 hover:bg-sky-100 px-3 py-1.5 rounded transition-colors"
+                      >
+                        Rank {shortlistCount} shortlisted
+                      </button>
+                    )}
+                    <button
+                      onClick={exportCsv}
+                      className="flex items-center gap-1.5 text-xs text-neutral-500 hover:text-neutral-900 transition-colors"
+                    >
+                      <Download className="w-3.5 h-3.5" /> Export CSV
+                    </button>
+                  </div>
                 </div>
                 <table className="w-full text-left text-sm">
                   <thead className="border-b border-neutral-200 bg-white">
                     <tr>
+                      {showRankColumn && <th className="px-3 py-3 text-xs font-semibold text-neutral-500 uppercase tracking-widest w-16">Rank</th>}
                       <th className="px-6 py-3 text-xs font-semibold text-neutral-500 uppercase tracking-widest">Candidate</th>
                       <th className="px-6 py-3 text-xs font-semibold text-neutral-500 uppercase tracking-widest">Decision</th>
                       <th className="px-6 py-3 text-xs font-semibold text-neutral-500 uppercase tracking-widest">Reason</th>
@@ -4152,10 +4515,29 @@ export default function App() {
                   </thead>
                   <tbody className="divide-y divide-neutral-100">
                     {[...bulkResults].sort((a, b) => {
+                      if (hasRanks) {
+                        if (a.rank != null && b.rank != null) return a.rank - b.rank;
+                        if (a.rank != null) return -1;
+                        if (b.rank != null) return 1;
+                      }
                       const order: Record<string, number> = { "P0": 0, "P1": 1, "Reject": 2, "Error": 3 };
                       return (order[effectiveRating(a)] ?? 4) - (order[effectiveRating(b)] ?? 4);
                     }).map((res, i) => (
                       <tr key={i} className="hover:bg-neutral-50">
+                        {showRankColumn && (
+                          <td className="px-3 py-4 text-center">
+                            {res.rank != null ? (
+                              <div className="flex flex-col items-center gap-0.5">
+                                <span className="text-sm font-bold text-neutral-700">#{res.rank}</span>
+                                {res.composite_score != null && (
+                                  <span className="text-[10px] text-neutral-400">{res.composite_score}</span>
+                                )}
+                              </div>
+                            ) : (ranking && (res.rating === "P0" || res.rating === "P1")) ? (
+                              <span className="text-xs text-neutral-300 animate-pulse">…</span>
+                            ) : null}
+                          </td>
+                        )}
                         <td className="px-6 py-4">
                           <div className="font-medium text-neutral-900">{res.name}</div>
                           {(res.email || res.phone) && (
@@ -4213,7 +4595,8 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
-            )}
+              );
+            })()}
 
 
             {/* ── Send Shortlist Modal ── */}
