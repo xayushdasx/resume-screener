@@ -657,12 +657,12 @@ Return a JSON object with these exact keys:
 {
   "rating": "P0" | "P1" | "Reject",
   "score": integer 0-100 (overall fit),
-  "reject_reason": string or null (required for Reject; single sentence why they fail), - NEVER RETURN ANYTHING ABOUT MONTHS OR YEARS OF EXPERIENCE OR "Candidate lacks minimum full-time work experience required."- STATEMENTS LIKE ("Full-time experience is only 10 months, below the 60 months minimum requirement." should not come up)
-  "reasoning": [array of strings — 2-3 bullet points, each a single short phrase (max 12 words), explaining the decision] - NEVER RETURN ANYTHING ABOUT MONTHS OR YEARS OF EXPERIENCE OR "Candidate lacks minimum full-time work experience required."- STATEMENTS LIKE ("Full-time experience is only 10 months, below the 60 months minimum requirement." should not come up)
-  "concerns": [array of strings — 1-2 short phrases (max 10 words each); empty array if none] - NEVER RETURN ANYTHING ABOUT MONTHS OR YEARS OF EXPERIENCE OR "Candidate lacks minimum full-time work experience required."- STATEMENTS LIKE ("Full-time experience is only 10 months, below the 60 months minimum requirement." should not come up)
+  "reject_reason": string or null (required for Reject; single sentence why they fail), - NEVER RETURN ANYTHING ABOUT NOT MEETING MINIMUM CRITERIA IN MONTHS OR YEARS OF EXPERIENCE OR "Candidate lacks minimum full-time work experience required."- STATEMENTS LIKE ("Full-time experience is only 10 months, below the 60 months minimum requirement." should not come up)
+  "reasoning": [array of strings — 2-3 bullet points, each a single short phrase (max 12 words), explaining the decision] - NEVER RETURN ANYTHING ABOUT NOT MEETING MINIMUM CRITERIA IN MONTHS OR YEARS  OF EXPERIENCE OR "Candidate lacks minimum full-time work experience required."- STATEMENTS LIKE ("Full-time experience is only 10 months, below the 60 months minimum requirement." should not come up)
+  "concerns": [array of strings — 1-2 short phrases (max 10 words each); empty array if none] - NEVER RETURN ANYTHING ABOUT NOT MEETING MINIMUM CRITERIA IN MONTHS OR YEARS OF EXPERIENCE OR "Candidate lacks minimum full-time work experience required."- STATEMENTS LIKE ("Full-time experience is only 10 months, below the 60 months minimum requirement." should not come up)
 }
 
-reasoning is REQUIRED for every candidate — never return an empty array. Each bullet must be a tight phrase, not a sentence. No filler, no repetition. Focus on the single most decisive signal per bullet.
+reasoning is REQUIRED for every candidate — never return an empty array. Each bullet must be a tight phrase, not a sentence. No filler, no repetition. Focus on the single most decisive signal per bullet. NEVER RETURN ANYTHING ABOUT MONTHS OR YEARS OF EXPERIENCE OR "Candidate lacks minimum full-time work experience required."- STATEMENTS LIKE ("Full-time experience is only 10 months, below the 60 months minimum requirement." should not come up)
 """
 
 When weightage_order is provided in the criteria, each item has an importance level. Use this to build the SCORING RUBRIC and P0/P1/Reject decision logic in the generated prompt:
