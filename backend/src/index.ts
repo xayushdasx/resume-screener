@@ -62,7 +62,7 @@ app.use("/api", mockFlowRouter);
 app.use("/api/share", shareRouter);
 
 // ── Health check ─────────────────────────────────────────────────────────────
-app.get("/health", (_req, res) => res.json({ status: "ok" }));
+app.get("/health", (_req, res) => res.sendStatus(200));
 
 // ── Cost dashboard ────────────────────────────────────────────────────────────
 app.get("/costs/data", (_req, res) => res.json(getCostLog()));
