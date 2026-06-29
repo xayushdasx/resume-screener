@@ -491,51 +491,80 @@ Return JSON: { "too_similar": true or false, "reason": "one short sentence expla
 });
 
 router.post("/select-diverse-sample", async (req: Request, res: Response) => {
-  const { candidates, n = 5 } = req.body as {
+  const { candidates, criteria, n = 5 } = req.body as {
     candidates: { filename: string; rating: string; signal_json: object }[];
-    criteria?: object;
+    criteria: { p0_text?: string; p1_text?: string; dealbreakers?: string; role_title?: string };
     n?: number;
   };
   if (!candidates?.length) return res.json({ selected: [] });
   if (candidates.length <= n) return res.json({ selected: candidates.map(c => c.filename) });
 
-  // Guaranteed rating-tier bucket sampling: shuffle each tier then round-robin pick.
-  // This ensures the taste checker always shows a mix of P0 / P1 / Reject
-  // rather than clustering within one rating tier.
-  const shuffle = <T,>(arr: T[]) => [...arr].sort(() => Math.random() - 0.5);
+  let client: OpenAI;
+  try { client = getClient(); } catch (e: any) { return res.status(500).json({ error: e.message }); }
 
-  const buckets: Record<string, { filename: string; rating: string; signal_json: object }[]> = {
-    P0: [],
-    P1: [],
-    Reject: [],
-  };
-  for (const c of candidates) {
-    const key = c.rating === "P0" ? "P0" : c.rating === "P1" ? "P1" : "Reject";
-    buckets[key].push(c);
-  }
+  // Count available ratings so the prompt can be accurate
+  const ratingCounts: Record<string, number> = {};
+  for (const c of candidates) ratingCounts[c.rating] = (ratingCounts[c.rating] ?? 0) + 1;
+  const availableTiers = Object.entries(ratingCounts).map(([r, count]) => `${r}: ${count}`).join(", ");
 
-  // Shuffle each bucket for variety across batches
-  for (const key of Object.keys(buckets)) buckets[key] = shuffle(buckets[key]);
+  const prompt = `You are curating a calibration session for a hiring manager. Your job is to select ${n} candidates from the pool below that together give the MOST DIVERSE and REPRESENTATIVE view of the applicant pool.
 
-  // Round-robin across tiers that have candidates
-  const selected: string[] = [];
-  const tiers = (["P0", "P1", "Reject"] as const).filter(t => buckets[t].length > 0);
-  const indices: Record<string, number> = { P0: 0, P1: 0, Reject: 0 };
+MANDATORY RULES — you must follow all of these:
+1. RATING SPREAD: You MUST include candidates from different rating tiers. If P0, P1, and Reject all exist in the pool, include at least one of each. Do NOT pick candidates all from the same rating tier.
+2. SKILL DIVERSITY: Among candidates of the same rating, prefer those with different skill combinations, tech stacks, or experience backgrounds so the hiring manager sees a range of profiles.
+3. EDGE CASES: Include borderline cases (e.g. a strong P1 close to P0, or a weak P0) to help calibrate where the line is.
+4. AVOID CLONES: Do not pick two candidates who look nearly identical in skills and rating.
 
-  while (selected.length < n) {
-    let anyAdded = false;
-    for (const tier of tiers) {
-      if (selected.length >= n) break;
-      if (indices[tier] < buckets[tier].length) {
-        selected.push(buckets[tier][indices[tier]].filename);
-        indices[tier]++;
-        anyAdded = true;
+Available pool breakdown: ${availableTiers}
+Role: ${criteria?.role_title || ""}
+P0 criteria: ${criteria?.p0_text || ""}
+P1 criteria: ${criteria?.p1_text || ""}
+Minimum Requirements: ${criteria?.dealbreakers || ""}
+
+Candidates (filename, rating, profile signals):
+${JSON.stringify(candidates.map(c => ({ filename: c.filename, rating: c.rating, signal: c.signal_json })), null, 2)}
+
+Return ONLY valid JSON in this exact format: {"selected": ["filename1", "filename2", ...], "reasoning": "one sentence explaining the mix you chose"}
+Select exactly ${n} filenames. Only use filenames from the list above.`;
+
+  try {
+    const completion = await client.chat.completions.create({
+      model: "gpt-4.1-mini",
+      messages: [{ role: "user", content: prompt }],
+      response_format: { type: "json_object" },
+      temperature: 0.3,
+      max_tokens: 400,
+    });
+    const parsed = JSON.parse(completion.choices[0].message.content ?? "{}");
+    const validFilenames = new Set(candidates.map(c => c.filename));
+    const selected: string[] = (parsed.selected ?? []).filter((f: string) => validFilenames.has(f)).slice(0, n);
+    // If LLM still returned fewer than n, fill from underrepresented rating tiers first
+    if (selected.length < n) {
+      const selectedSet = new Set(selected);
+      const selectedRatings = new Set(candidates.filter(c => selectedSet.has(c.filename)).map(c => c.rating));
+      // First fill from rating tiers not yet represented
+      for (const c of candidates) {
+        if (selected.length >= n) break;
+        if (!selectedSet.has(c.filename) && !selectedRatings.has(c.rating)) {
+          selected.push(c.filename); selectedSet.add(c.filename); selectedRatings.add(c.rating);
+        }
+      }
+      // Then fill remaining slots from any unselected candidate
+      for (const c of candidates) {
+        if (selected.length >= n) break;
+        if (!selectedSet.has(c.filename)) { selected.push(c.filename); selectedSet.add(c.filename); }
       }
     }
-    if (!anyAdded) break; // all buckets exhausted
+    return res.json({ selected });
+  } catch (e: any) {
+    // Fallback: pick one from each rating tier, then fill
+    const byRating: Record<string, string[]> = {};
+    for (const c of candidates) { if (!byRating[c.rating]) byRating[c.rating] = []; byRating[c.rating].push(c.filename); }
+    const selected: string[] = [];
+    for (const tier of ["P0", "P1", "Reject"]) { if (byRating[tier]?.length && selected.length < n) selected.push(byRating[tier][0]); }
+    for (const c of candidates) { if (selected.length >= n) break; if (!selected.includes(c.filename)) selected.push(c.filename); }
+    return res.json({ selected });
   }
-
-  return res.json({ selected });
 });
 
 router.post("/recalibrate-prompt", async (req: Request, res: Response) => {
