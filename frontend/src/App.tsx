@@ -2347,6 +2347,8 @@ export default function App() {
         compressEvalPrompt(newPrompt)
           .then(cv => setCompressedView(cv))
           .finally(() => setCompressingView(false));
+        // Clear pre-screened pool — those results were scored against the old prompt
+        setPreScreenedResults([]);
         // Re-evaluate current batch with new prompt
         await reEvalCurrentBatch(newPrompt, currentBatchFilenames, tasteCandidatePool);
       }
