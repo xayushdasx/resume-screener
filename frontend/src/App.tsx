@@ -2128,7 +2128,7 @@ export default function App() {
       if (eligibleForDiversity.length > 5) {
         try {
           const result = await selectDiverseSample(
-            eligibleForDiversity.map(d => ({ filename: d.filename, rating: d.rating, signal_json: d.signal_json })),
+            eligibleForDiversity.map(d => ({ filename: d.filename, rating: d.rating, signal_json: d.signal_json, composite_score: (d as any).composite_score ?? null })),
             { p0_text: c?.p0_text ?? "", p1_text: c?.p1_text ?? "", dealbreakers: c?.dealbreakers ?? "", role_title: p?.extracted_params?.role_title ?? "" },
             5
           );
@@ -2201,7 +2201,7 @@ export default function App() {
         if (eligible.length > 5) {
           try {
             const result = await selectDiverseSample(
-              eligible.map((d: any) => ({ filename: d.filename, rating: d.rating, signal_json: d.signal_json })),
+              eligible.map((d: any) => ({ filename: d.filename, rating: d.rating, signal_json: d.signal_json, composite_score: d.composite_score ?? null })),
               { p0_text: c?.p0_text ?? "", p1_text: c?.p1_text ?? "", dealbreakers: c?.dealbreakers ?? "", role_title: p?.extracted_params?.role_title ?? "" },
               5
             );
