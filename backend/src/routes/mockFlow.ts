@@ -490,6 +490,64 @@ Return JSON: { "too_similar": true or false, "reason": "one short sentence expla
   }
 });
 
+router.post("/select-diverse-sample", async (req: Request, res: Response) => {
+  const { candidates, criteria, n = 5 } = req.body as {
+    candidates: { filename: string; rating: string; signal_json: object }[];
+    criteria: { p0_text?: string; p1_text?: string; dealbreakers?: string; role_title?: string };
+    n?: number;
+  };
+  if (!candidates?.length) return res.json({ selected: [] });
+  if (candidates.length <= n) return res.json({ selected: candidates.map(c => c.filename) });
+
+  let client: OpenAI;
+  try { client = getClient(); } catch (e: any) { return res.status(500).json({ error: e.message }); }
+
+  const prompt = `You are selecting candidates for a hiring manager calibration session.
+Given these ${candidates.length} pre-screened candidates and the job criteria, select exactly ${n} that give the hiring manager the most DIVERSE set of profiles to calibrate on.
+
+Prioritize variety in:
+- Skill combinations relative to the criteria (different relevant skills present/absent)
+- Rating spread (include different ratings when available: P0, P1, Reject)
+- Background patterns and experience types
+- Different strength/weakness profiles against the criteria
+
+Role: ${criteria.role_title || ""}
+P0 (Strong Hire): ${criteria.p0_text || ""}
+P1 (Potential Hire): ${criteria.p1_text || ""}
+Minimum Requirements: ${criteria.dealbreakers || ""}
+
+Candidates:
+${JSON.stringify(candidates.map(c => ({ filename: c.filename, rating: c.rating, signal: c.signal_json })))}
+
+Return ONLY valid JSON: {"selected": ["filename1", "filename2", ...]}
+Select exactly ${n} filenames from the list above. Do not invent filenames.`;
+
+  try {
+    const completion = await client.chat.completions.create({
+      model: "gpt-4.1-mini",
+      messages: [{ role: "user", content: prompt }],
+      response_format: { type: "json_object" },
+      temperature: 0,
+      max_tokens: 200,
+    });
+    const parsed = JSON.parse(completion.choices[0].message.content ?? "{}");
+    const validFilenames = new Set(candidates.map(c => c.filename));
+    const selected: string[] = (parsed.selected ?? []).filter((f: string) => validFilenames.has(f)).slice(0, n);
+    // Fill up to n if LLM returned fewer valid filenames
+    if (selected.length < n) {
+      const selectedSet = new Set(selected);
+      for (const c of candidates) {
+        if (selected.length >= n) break;
+        if (!selectedSet.has(c.filename)) { selected.push(c.filename); selectedSet.add(c.filename); }
+      }
+    }
+    return res.json({ selected });
+  } catch (e: any) {
+    // Fallback: return first n
+    return res.json({ selected: candidates.slice(0, n).map(c => c.filename) });
+  }
+});
+
 router.post("/recalibrate-prompt", async (req: Request, res: Response) => {
   const { evaluator_prompt, feedback } = req.body as {
     evaluator_prompt: string;

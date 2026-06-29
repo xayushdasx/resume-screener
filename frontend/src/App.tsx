@@ -13,7 +13,7 @@ import { SendShortlistModal } from "./SendShortlistModal";
 import type { ShortlistEntry } from "./SendShortlistModal";
 import { CreateRole } from "./CreateRole";
 import type { ATSRole, ATSCandidate } from "./RolesList";
-import { generatePrompt, generateJd, uploadPdf, parseEvaluatorPrompt, recalibratePrompt, bulkScreenStream, buildEvaluatorFromCriteria, screenAndSampleStream, bulkEvalStream, dynamicTweakPrompt, compressEvalPrompt, checkCriteriaVagueness, generateClarifyingQuestions, createShare, getShare, updateShare, uploadShareFiles, getShareFileUrl, rankCandidatesStream, checkP0P1Similarity } from "./api";
+import { generatePrompt, generateJd, uploadPdf, parseEvaluatorPrompt, recalibratePrompt, bulkScreenStream, buildEvaluatorFromCriteria, screenAndSampleStream, bulkEvalStream, dynamicTweakPrompt, compressEvalPrompt, checkCriteriaVagueness, generateClarifyingQuestions, createShare, getShare, updateShare, uploadShareFiles, getShareFileUrl, rankCandidatesStream, checkP0P1Similarity, selectDiverseSample } from "./api";
 import type { CompressedView } from "./api";
 import type { GeneratePromptResponse, TestResumeResponse } from "./types";
 import { idbSaveFile, idbGetFile } from "./idbFiles";
@@ -1590,6 +1590,11 @@ export default function App() {
   const paramsDataRef = useRef(paramsData);
   useEffect(() => { paramsDataRef.current = paramsData; }, [paramsData]);
 
+  const criteriaRef = useRef(criteria);
+  useEffect(() => { criteriaRef.current = criteria; }, [criteria]);
+
+  const [preScreenedResults, setPreScreenedResults] = useState<any[]>([]);
+
   // Debounced P0/P1 similarity check via LLM
   useEffect(() => {
     const p0 = criteria?.p0_text ?? "";
@@ -1815,6 +1820,7 @@ export default function App() {
         setTasteCandidatePool([]);
         setReviewIndex(0);
         setBulkResults([]);
+        setPreScreenedResults([]);
         setRanking(false);
         setRankingProgress(null);
         setOriginalEvaluatorPrompt(res.evaluator_prompt);
@@ -2066,6 +2072,88 @@ export default function App() {
     }
   };
 
+  // Screens up to 20 resumes, diversity-selects 5 to show HR, stores the rest pre-screened
+  const runDiverseBatch = async (pool: { text: string; filename: string }[], evaluatorPrompt: string, compressorPrompt: string) => {
+    const toScreen = pool.slice(0, 20);
+    setCurrentBatchFilenames(toScreen.map(r => r.filename));
+    setEvaluatedFilenames(prev => new Set([...prev, ...toScreen.map(r => r.filename)]));
+    setTasteResults(toScreen.map(f => ({ filename: f.filename, name: f.filename, result: null })));
+    setFeedback({});
+    setEvaluatingTaste(true);
+    setTasteProgress({ phase: "Analyzing resume pool", done: 0, total: toScreen.length });
+
+    const allResults: any[] = [];
+    const screened = new Set<string>();
+    const MAX_RETRIES = 3;
+    let retries = 0;
+    let remaining = [...toScreen];
+
+    try {
+      while (remaining.length > 0) {
+        try {
+          const stream = bulkScreenStream(remaining, compressorPrompt, evaluatorPrompt, "TASTE CHECK — Diversity Pool");
+          for await (const event of stream) {
+            if (event.type === "result") {
+              const d = event.data;
+              screened.add(d.filename);
+              allResults.push(d);
+              if (d.signal_json && d.rating !== "Error") {
+                setTasteCandidatePool(prev =>
+                  prev.find(c => c.filename === d.filename)
+                    ? prev
+                    : [...prev, { filename: d.filename, name: d.name, email: d.email ?? null, phone: d.phone ?? null, signal_json: d.signal_json, college_name: (d.signal_json as any)?.college_name, college_tier: (d.signal_json as any)?.college_tier }]
+                );
+              }
+              setTasteProgress({ phase: "Analyzing resume pool", done: screened.size, total: toScreen.length });
+            }
+          }
+          break;
+        } catch (streamErr: any) {
+          retries++;
+          remaining = remaining.filter(r => !screened.has(r.filename));
+          if (remaining.length === 0 || retries > MAX_RETRIES) break;
+          setTasteProgress({ phase: `Reconnecting… (${remaining.length} left)`, done: screened.size, total: toScreen.length });
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      }
+
+      if (allResults.length === 0) return;
+
+      // Diversity-select 5 from the screened pool
+      setTasteProgress({ phase: "Selecting diverse candidates", done: allResults.length, total: allResults.length });
+      const c = criteriaRef.current;
+      const p = paramsDataRef.current;
+      const eligibleForDiversity = allResults.filter(d => d.signal_json && d.rating !== "Error");
+      let selectedFilenames: string[] = [];
+      if (eligibleForDiversity.length > 5) {
+        try {
+          const result = await selectDiverseSample(
+            eligibleForDiversity.map(d => ({ filename: d.filename, rating: d.rating, signal_json: d.signal_json })),
+            { p0_text: c?.p0_text ?? "", p1_text: c?.p1_text ?? "", dealbreakers: c?.dealbreakers ?? "", role_title: p?.extracted_params?.role_title ?? "" },
+            5
+          );
+          selectedFilenames = result.selected;
+        } catch {
+          selectedFilenames = eligibleForDiversity.slice(0, 5).map(d => d.filename);
+        }
+      } else {
+        selectedFilenames = allResults.slice(0, 5).map(d => d.filename);
+      }
+
+      const selectedSet = new Set(selectedFilenames);
+      const selectedResults = selectedFilenames.map(fn => allResults.find(r => r.filename === fn)).filter(Boolean).map(toTasteResult);
+      const nonSelected = allResults.filter(d => !selectedSet.has(d.filename));
+
+      setPreScreenedResults(prev => [...prev, ...nonSelected]);
+      setCurrentBatchFilenames(selectedFilenames);
+      setTasteResults(selectedResults);
+      setReviewIndex(0);
+    } finally {
+      setEvaluatingTaste(false);
+      setTasteProgress(null);
+    }
+  };
+
   const reEvalCurrentBatch = async (newEvaluatorPrompt: string, batchFilenames: string[], candidatePool: CandidateSignal[]) => {
     const candidates = batchFilenames
       .map(f => candidatePool.find(c => c.filename === f))
@@ -2093,14 +2181,54 @@ export default function App() {
     }
   };
 
-  const handleNextBatch = () => {
+  const handleNextBatch = async () => {
     if (!paramsDataRef.current || evaluatingTaste) return;
+
+    // Use pre-screened pool first (already evaluated, just need diversity selection)
+    const availablePreScreened = preScreenedResults.filter(d => !evaluatedFilenames.has(d.filename));
+    if (availablePreScreened.length > 0) {
+      const filenames = availablePreScreened.map((d: any) => d.filename);
+      setEvaluatedFilenames(prev => new Set([...prev, ...filenames]));
+      setPreScreenedResults([]);
+      setFeedback({});
+      setEvaluatingTaste(true);
+      setTasteProgress({ phase: "Selecting diverse candidates", done: availablePreScreened.length, total: availablePreScreened.length });
+      try {
+        const c = criteriaRef.current;
+        const p = paramsDataRef.current;
+        const eligible = availablePreScreened.filter((d: any) => d.signal_json && d.rating !== "Error");
+        let selectedFilenames: string[] = [];
+        if (eligible.length > 5) {
+          try {
+            const result = await selectDiverseSample(
+              eligible.map((d: any) => ({ filename: d.filename, rating: d.rating, signal_json: d.signal_json })),
+              { p0_text: c?.p0_text ?? "", p1_text: c?.p1_text ?? "", dealbreakers: c?.dealbreakers ?? "", role_title: p?.extracted_params?.role_title ?? "" },
+              5
+            );
+            selectedFilenames = result.selected;
+          } catch {
+            selectedFilenames = eligible.slice(0, 5).map((d: any) => d.filename);
+          }
+        } else {
+          selectedFilenames = availablePreScreened.slice(0, 5).map((d: any) => d.filename);
+        }
+        const selectedResults = selectedFilenames.map(fn => availablePreScreened.find((r: any) => r.filename === fn)).filter(Boolean).map(toTasteResult);
+        setCurrentBatchFilenames(selectedFilenames);
+        setTasteResults(selectedResults);
+        setReviewIndex(0);
+      } finally {
+        setEvaluatingTaste(false);
+        setTasteProgress(null);
+      }
+      return;
+    }
+
+    // No pre-screened left — screen a new batch of up to 20
     const remaining = parsedResumes.filter(r => !evaluatedFilenames.has(r.filename));
     if (remaining.length === 0) return;
     const shuffled = [...remaining].sort(() => Math.random() - 0.5);
-    const next = shuffled.slice(0, 5);
     setReviewIndex(0);
-    runBatch(next, paramsDataRef.current.evaluator_prompt, paramsDataRef.current.compressor_prompt);
+    runDiverseBatch(shuffled, paramsDataRef.current.evaluator_prompt, paramsDataRef.current.compressor_prompt);
   };
 
   const handleTasteUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2122,6 +2250,7 @@ export default function App() {
     setReviewIndex(0);
     setConsecutiveAgrees(0);
     setCalibrationComplete(false);
+    setPreScreenedResults([]);
     setTastePoolCount(files.length);
     setTasteProgress({ phase: "Parsing PDFs", done: 0, total: files.length });
     setEvaluatingTaste(true);
@@ -2163,10 +2292,9 @@ export default function App() {
       setEvaluatingTaste(false);
       setTasteProgress(null);
 
-      // Evaluate first 5 — random sample
+      // Evaluate first batch — diversity-selected from up to 20
       const shuffled = [...parsed].sort(() => Math.random() - 0.5);
-      const first5 = shuffled.slice(0, 5);
-      await runBatch(first5, paramsData.evaluator_prompt, paramsData.compressor_prompt);
+      await runDiverseBatch(shuffled, paramsData.evaluator_prompt, paramsData.compressor_prompt);
     } catch (err: any) {
       setRecalibrateError(err.message ?? "Taste check failed");
       setEvaluatingTaste(false);

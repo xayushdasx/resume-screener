@@ -304,6 +304,19 @@ export async function compressEvalPrompt(
   };
 }
 
+export async function selectDiverseSample(
+  candidates: { filename: string; rating: string; signal_json: object }[],
+  criteria: { p0_text: string; p1_text: string; dealbreakers?: string; role_title?: string },
+  n = 5
+): Promise<{ selected: string[] }> {
+  const res = await fetch(`${BASE}/select-diverse-sample`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ candidates, criteria, n }),
+  });
+  return safeJson(res);
+}
+
 export async function checkP0P1Similarity(
   p0_text: string,
   p1_text: string
