@@ -492,7 +492,7 @@ Return JSON: { "too_similar": true or false, "reason": "one short sentence expla
 
 router.post("/select-diverse-sample", async (req: Request, res: Response) => {
   const { candidates, criteria, n = 5 } = req.body as {
-    candidates: { filename: string; rating: string; signal_json: object; composite_score?: number | null }[];
+    candidates: { filename: string; signal_json: object }[];
     criteria: { p0_text?: string; p1_text?: string; dealbreakers?: string; role_title?: string };
     n?: number;
   };
@@ -502,72 +502,44 @@ router.post("/select-diverse-sample", async (req: Request, res: Response) => {
   let client: OpenAI;
   try { client = getClient(); } catch (e: any) { return res.status(500).json({ error: e.message }); }
 
-  // Count available ratings
-  const ratingCounts: Record<string, number> = {};
-  for (const c of candidates) ratingCounts[c.rating] = (ratingCounts[c.rating] ?? 0) + 1;
-  const availableTiers = Object.entries(ratingCounts).map(([r, count]) => `${r}: ${count}`).join(", ");
+  const prompt = `You are curating a calibration session for a hiring manager. Your job is to pick ${n} candidates from the pool below that are as DIFFERENT from each other as possible, so the hiring manager sees a wide variety of profiles.
 
-  // Compute tier score boundaries so the LLM can identify borderline candidates by score
-  const p0Scores = candidates.filter(c => c.rating === "P0" && c.composite_score != null).map(c => c.composite_score as number);
-  const p1Scores = candidates.filter(c => c.rating === "P1" && c.composite_score != null).map(c => c.composite_score as number);
-  const rejectScores = candidates.filter(c => c.rating === "Reject" && c.composite_score != null).map(c => c.composite_score as number);
-  const minP0 = p0Scores.length ? Math.min(...p0Scores) : null;
-  const maxP1 = p1Scores.length ? Math.max(...p1Scores) : null;
-  const maxReject = rejectScores.length ? Math.max(...rejectScores) : null;
+Focus ONLY on the substance of each candidate's profile:
+- Skills and tech stack (languages, frameworks, tools)
+- Work experience: industries, company types, roles held, depth of ownership
+- Projects: what they built, domain, complexity
+- Education and background
 
-  const boundaryLines: string[] = [];
-  if (minP0 != null && maxP1 != null) boundaryLines.push(`P0/P1 boundary: lowest P0 score = ${minP0}, highest P1 score = ${maxP1}. Candidates within 5 points of this gap are borderline between P0 and P1.`);
-  if (maxP1 != null && maxReject != null) boundaryLines.push(`P1/Reject boundary: highest P1 = ${maxP1}, highest Reject = ${maxReject}. Candidates within 5 points of this gap are borderline between P1 and Reject.`);
-  const boundaryContext = boundaryLines.length ? boundaryLines.join("\n") : "Score data unavailable for this batch — rely on rating and signal_json instead.";
+Rules:
+1. MAXIMIZE DIFFERENCE: Each of the ${n} selected candidates should look as different as possible from the others across skills, experience, and background. Do not pick two candidates with nearly the same profile.
+2. COVER THE SPACE: Try to represent the full range of profile types present in the pool — not just the most impressive ones. Include candidates with different strengths and weaknesses relative to the role.
+3. IGNORE SCORES AND RATINGS: Do not use any rating or score to guide selection. Base your decision entirely on what the profiles actually contain.
 
-  const prompt = `You are curating a calibration session for a hiring manager so they can see a representative slice of the applicant pool and set better hiring criteria.
-
-Your goal: select ${n} candidates that together show the MOST DIVERSE and CALIBRATION-USEFUL view of the pool.
-
-MANDATORY RULES — follow ALL, in this priority order:
-1. RATING SPREAD: You MUST pick from different rating tiers. If P0, P1, and Reject all exist, include at least one of each. NEVER pick all ${n} from the same tier.
-2. BORDERLINE BY SCORE (highest calibration value): Candidates whose composite_score is within 5 points of a tier boundary are the most useful — they show the hiring manager exactly where the line is drawn. Actively look for these and prioritize them.
-3. SKILL DIVERSITY: Within the same rating tier, prefer candidates with different skill combinations, tech stacks, work/project descriptions, experience backgrounds, or education — not just what is listed under "skills" but the full profile.
-4. NO CLONES: Do not pick two candidates who are nearly identical in both score and skill profile.
-
-Score boundaries computed from this batch:
-${boundaryContext}
-
-Pool breakdown: ${availableTiers}
 Role: ${criteria?.role_title || ""}
-P0 criteria: ${criteria?.p0_text || ""}
-P1 criteria: ${criteria?.p1_text || ""}
-Minimum Requirements: ${criteria?.dealbreakers || ""}
+What the role needs (P0): ${criteria?.p0_text || ""}
+Also valuable (P1): ${criteria?.p1_text || ""}
+Minimum requirements: ${criteria?.dealbreakers || ""}
 
-Candidates (filename | rating | composite_score | profile signals):
-${JSON.stringify(candidates.map(c => ({ filename: c.filename, rating: c.rating, composite_score: c.composite_score ?? "N/A", signal: c.signal_json })), null, 2)}
+Candidates (filename + full profile signals):
+${JSON.stringify(candidates.map(c => ({ filename: c.filename, signal: c.signal_json })), null, 2)}
 
-Return ONLY valid JSON: {"selected": ["filename1", ...], "reasoning": "one sentence on what mix you chose and any borderline cases"}
-Select exactly ${n} filenames from the list above.`;
+Return ONLY valid JSON: {"selected": ["filename1", "filename2", ...], "reasoning": "one sentence on what made these 5 maximally different from each other"}
+Select exactly ${n} filenames. Only use filenames from the list above.`;
 
   try {
     const completion = await client.chat.completions.create({
       model: "gpt-4.1-mini",
       messages: [{ role: "user", content: prompt }],
       response_format: { type: "json_object" },
-      temperature: 0.3,
+      temperature: 0.4,
       max_tokens: 400,
     });
     const parsed = JSON.parse(completion.choices[0].message.content ?? "{}");
     const validFilenames = new Set(candidates.map(c => c.filename));
     const selected: string[] = (parsed.selected ?? []).filter((f: string) => validFilenames.has(f)).slice(0, n);
-    // If LLM still returned fewer than n, fill from underrepresented rating tiers first
+    // Fill remaining slots if LLM returned fewer than n
     if (selected.length < n) {
       const selectedSet = new Set(selected);
-      const selectedRatings = new Set(candidates.filter(c => selectedSet.has(c.filename)).map(c => c.rating));
-      // First fill from rating tiers not yet represented
-      for (const c of candidates) {
-        if (selected.length >= n) break;
-        if (!selectedSet.has(c.filename) && !selectedRatings.has(c.rating)) {
-          selected.push(c.filename); selectedSet.add(c.filename); selectedRatings.add(c.rating);
-        }
-      }
-      // Then fill remaining slots from any unselected candidate
       for (const c of candidates) {
         if (selected.length >= n) break;
         if (!selectedSet.has(c.filename)) { selected.push(c.filename); selectedSet.add(c.filename); }
@@ -575,13 +547,7 @@ Select exactly ${n} filenames from the list above.`;
     }
     return res.json({ selected });
   } catch (e: any) {
-    // Fallback: pick one from each rating tier, then fill
-    const byRating: Record<string, string[]> = {};
-    for (const c of candidates) { if (!byRating[c.rating]) byRating[c.rating] = []; byRating[c.rating].push(c.filename); }
-    const selected: string[] = [];
-    for (const tier of ["P0", "P1", "Reject"]) { if (byRating[tier]?.length && selected.length < n) selected.push(byRating[tier][0]); }
-    for (const c of candidates) { if (selected.length >= n) break; if (!selected.includes(c.filename)) selected.push(c.filename); }
-    return res.json({ selected });
+    return res.json({ selected: candidates.slice(0, n).map(c => c.filename) });
   }
 });
 
