@@ -2459,6 +2459,8 @@ export default function App() {
       yearsExperience: totalMonths != null ? Math.round(totalMonths / 12 * 10) / 10 : null,
       internshipMonths: internMonths,
       fulltimeMonths: ftMonths,
+      rank: (r as any).rank ?? null,
+      composite_score: (r as any).composite_score ?? null,
       runAt: new Date().toISOString(),
     };
   };

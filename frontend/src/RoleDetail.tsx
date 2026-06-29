@@ -95,6 +95,9 @@ export function RoleDetail({
         if (a.rank != null && b.rank != null) return a.rank - b.rank;
         if (a.rank != null) return -1;
         if (b.rank != null) return 1;
+        if (a.composite_score != null && b.composite_score != null) return b.composite_score - a.composite_score;
+        if (a.composite_score != null) return -1;
+        if (b.composite_score != null) return 1;
       }
       return (RATING_ORDER[a.aiRating] ?? 4) - (RATING_ORDER[b.aiRating] ?? 4);
     });
@@ -393,7 +396,8 @@ export function RoleDetail({
               </p>
             ) : (
               (() => {
-                const gridCols = "grid-cols-[32px_1fr_72px_96px_1fr_100px_72px_56px]";
+                const showRank = tab === "shortlisted";
+                const gridCols = showRank ? "grid-cols-[32px_36px_1fr_72px_96px_1fr_100px_72px_56px]" : "grid-cols-[32px_1fr_72px_96px_1fr_100px_72px_56px]";
                 const hdrCls = "text-[10px] font-bold uppercase tracking-widest text-neutral-400";
                 return (
               <div className="border border-neutral-200 border-t-0 overflow-hidden">
@@ -405,6 +409,7 @@ export function RoleDetail({
                     onChange={toggleAll}
                     className="mt-0.5 cursor-pointer"
                   />
+                  {showRank && <span className={hdrCls}>#</span>}
                   <span className={hdrCls}>Candidate</span>
                   <span className={`${hdrCls} text-center`}>Rating</span>
                   <span className={`${hdrCls} text-center`}>Status</span>
@@ -441,6 +446,10 @@ export function RoleDetail({
                           className="mt-0.5 cursor-pointer"
                           onClick={e => e.stopPropagation()}
                         />
+
+                        {showRank && (
+                          <span className="text-xs font-bold text-neutral-400">#{i + 1}</span>
+                        )}
 
                         {/* Candidate */}
                         <div className="flex items-center gap-2.5 min-w-0">
