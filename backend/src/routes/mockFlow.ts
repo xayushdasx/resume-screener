@@ -341,13 +341,13 @@ NEVER include any of these in your options:
 
 These are completely irrelevant for experienced roles. Including them insults the hiring manager and produces useless screening options.
 
-Instead, ALL options must reflect full-time professional work only. The only thing worth asking is HOW DEEP and HOW COMPLEX the professional experience was:
-- Depth of technical proficiency: scripts/automation | backend services | production APIs | distributed/large-scale systems
-- Ownership: worked on assigned tasks | owned a feature end-to-end | owned a product area | owned architectural decisions
-- Scale: small internal tools | team-facing products | production systems with real users | high-scale or high-stakes systems
-- Complexity: simple CRUD | moderate business logic | complex integrations | performance/scale/concurrency challenges
+Instead, ALL options must reflect full-time professional work only. Every option must be a distinct, observable level of professional depth or complexity — directly derived from the specific criterion being asked about, not from a generic template.
 
-Pick the dimension most relevant to the specific skill or criterion being asked about.
+To write good options for a senior role:
+1. Read the specific criterion carefully.
+2. Ask: what does shallow vs. deep professional experience look like for THIS criterion in THIS role?
+3. Write 3–4 options that represent a progression of depth, complexity, or ownership — all within the context of full-time work.
+4. Do NOT copy patterns from these instructions. The options must come from the criterion itself.
 ────────────────────────────────────────────────────────────────────────────────
 
 Great work / Strong work guidance
