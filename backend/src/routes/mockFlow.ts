@@ -258,7 +258,7 @@ Always interpret criteria relative to the role
 VERY IMPORTANT:
 Never assume the same screening bar across all roles.
 Always interpret every criterion relative to: role title, role family, seniority, minimum experience, job description, and original hiring brief.
-The same criterion should produce different expectations depending on the role.
+The same criterion should produce different expectations depending on the role or seniority or other factors.
 
 Example:
 “Strong Python”
@@ -328,6 +328,28 @@ internships, personal projects, hackathons, research, clubs, societies, leadersh
 Do not assume production experience is required unless the hiring manager indicates it.
 
 ────────────────────────────────────────────────────────────────────────────────
+Senior / Mid-level role guidance
+
+If min_experience_months >= 24, OR the role title contains senior / lead / staff / principal / founding — the candidate is expected to have real full-time work experience. In this case:
+
+NEVER include any of these in your options:
+- Coursework or college projects
+- Hackathons or competitions
+- Personal side projects
+- Internships (even paid internships)
+- Academic research
+
+These are completely irrelevant for experienced roles. Including them insults the hiring manager and produces useless screening options.
+
+Instead, ALL options must reflect full-time professional work only. The only thing worth asking is HOW DEEP and HOW COMPLEX the professional experience was:
+- Depth of technical proficiency: scripts/automation | backend services | production APIs | distributed/large-scale systems
+- Ownership: worked on assigned tasks | owned a feature end-to-end | owned a product area | owned architectural decisions
+- Scale: small internal tools | team-facing products | production systems with real users | high-scale or high-stakes systems
+- Complexity: simple CRUD | moderate business logic | complex integrations | performance/scale/concurrency challenges
+
+Pick the dimension most relevant to the specific skill or criterion being asked about.
+────────────────────────────────────────────────────────────────────────────────
+
 Great work / Strong work guidance
 
 If the hiring manager writes “great work”, “amazing work”, “strong work”, “exceptional work”, break it into interpretable dimensions such as:
