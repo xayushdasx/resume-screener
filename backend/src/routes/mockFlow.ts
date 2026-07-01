@@ -280,38 +280,24 @@ Generate clarification questions whenever a criterion has ambiguity in any of th
    Example: “Good communication” — should this mean presentations, customer-facing work, stakeholder management, public speaking, documentation, cross-functional collaboration?
 
 3. Proficiency ambiguity — the expected level depends on the role.
-   Examples:
-   - “Strong SQL” could mean: CRUD queries | joins & aggregations | optimization | warehouse design
-   - “Strong Python” could mean: coursework | personal projects | production APIs | distributed systems
+   The same skill means very different things at different seniority levels and in different roles. Always derive what “strong X” means from the JD, seniority, min experience, and criteria — never from a fixed definition of that skill.
 
 4. Threshold ambiguity — the hiring manager has not defined what minimum bar qualifies.
-   Examples: How many projects? How many internships? Live deployment required? Production experience required? External recognition required?
+   Examples: Live deployment required? Production experience required? External recognition required? What level of ownership counts?
 
 5. Complexity ambiguity — especially important for technical roles.
    Ask whether the expectation is about: scale, complexity, production usage, ownership, architectural responsibility, performance, duration of work, depth of implementation.
-   Example: “Python” is NOT enough. Clarify whether they expect: coursework | automation scripts | backend APIs | production services | distributed systems | infrastructure | ML pipelines
 
 ────────────────────────────────────────────────────────────────────────────────
-Skill-specific clarification guidance
+Skill and soft-skill clarification guidance
 
-When technical skills are mentioned, ask about the actual evidence expected, not subjective proficiency.
-- Bad: “What do you mean by Python?” / options: Beginner / Intermediate / Advanced
-- Good: “What kind of Python work should count?” / options: College projects | Internship projects | Production applications | Large-scale systems
+When writing options for any skill — technical or soft — DO NOT use a fixed lookup table or copy examples from these instructions. Instead:
 
-SQL:     Basic queries | Complex joins | Query optimization | Data warehouse work
-React:   Academic projects | Production applications | Large frontend applications | Design systems
-Java:    Coursework | Backend services | Distributed systems | Performance/concurrency-heavy systems
-System Design: Learned concepts | Small applications | Production architecture | Large distributed systems
-
-IN EACH OF IT YOU WILL NOT JUST TALK ABOUT THE SCALE OR OWNERSHIP OF WORK, IT IS ABOUT THE TECHNICAL SKILL LEVEL AND ABILITY TO APPLY THOSE TECHNICAL CONCEPTS TOO!
-────────────────────────────────────────────────────────────────────────────────
-Soft-skill clarification guidance
-
-When clarifying soft skills, ask about observable evidence.
-- Leadership:      Led a club | Managed a small team | Managed cross-functional teams | Built and scaled organizations
-- Ownership:       Finished assigned work | Owned features | Owned products | Owned business outcomes
-- Communication:   Team communication | Stakeholder management | Client-facing work | Executive communication
-- Problem solving: Academic problems | Real-world projects | Large ambiguous problems | High-impact technical decisions
+1. Read the specific criterion and the full context: role title, JD, seniority, min experience, P0/P1 criteria.
+2. Ask: given THIS role at THIS seniority level, what does shallow vs. deep experience look like for this specific skill?
+3. Write 3–4 options that are a progression of depth, complexity, or ownership — derived entirely from the role context.
+4. For technical skills: options must reflect both the TYPE of work (what was built/used) AND the TECHNICAL DEPTH (how complex, what concepts applied) — not just scale or ownership alone.
+5. For soft skills: options must reflect observable, resume-verifiable evidence — not subjective labels.
 
 ────────────────────────────────────────────────────────────────────────────────
 Product-specific guidance
@@ -380,11 +366,7 @@ Example — Ownership:
   ❌ Good ownership
   ✅ Worked on assigned tasks | Owned a feature | Owned a product area | Owned business outcomes
 
-Example — Python:
-  ❌ Beginner / Intermediate / Advanced
-  ✅ College projects | Internship projects | Production applications | Large-scale systems
-
-Options must be concrete, mutually distinguishable, and directly usable for screening resumes. Use 3–4 options per question.
+Options must be concrete, mutually distinguishable, and directly usable for screening resumes. Use 3–4 options per question. Always derive options from the role context — never from a fixed skill template.
 
 ────────────────────────────────────────────────────────────────────────────────
 General rules
