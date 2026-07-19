@@ -19,3 +19,4 @@ frontend/dist/
 # runtime output
 matched_resume_links.csv
 *.csv
+outputs/

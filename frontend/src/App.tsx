@@ -1714,10 +1714,10 @@ export default function App() {
     if (batchEndTriggeredRef.current || evaluatingTaste) return;
     batchEndTriggeredRef.current = true;
     const remaining = parsedResumes.filter(r => !evaluatedFilenames.has(r.filename));
-    if (remaining.length > 0 && paramsDataRef.current) {
+    if ((remaining.length > 0 || preScreenedResults.length > 0) && paramsDataRef.current) {
       setTimeout(() => handleNextBatch(), 300);
     }
-  }, [reviewIndex, tasteResults.length, evaluatingTaste, parsedResumes, evaluatedFilenames]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [reviewIndex, tasteResults.length, evaluatingTaste, parsedResumes, evaluatedFilenames, preScreenedResults]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pb = useProgressBar();
   const jdDirty = paramsData !== null && jd !== prevJd.current;
@@ -2185,7 +2185,11 @@ export default function App() {
     if (!paramsDataRef.current || evaluatingTaste) return;
 
     const unscreened = parsedResumes.filter(r => !evaluatedFilenames.has(r.filename));
-    let pool = preScreenedResults.filter((d: any) => !evaluatedFilenames.has(d.filename));
+    // Note: preScreenedResults already excludes candidates selected into a review batch
+    // (see runDiverseBatch/handleNextBatch below) — do NOT filter it by evaluatedFilenames,
+    // since every screened resume (including these leftovers) is added to evaluatedFilenames
+    // up front, before batch selection happens. Filtering here would wrongly empty the pool.
+    let pool = [...preScreenedResults];
 
     // If pool has fewer than 5, top it up by screening 5 more from unscreened (not 20)
     if (pool.length < 5 && unscreened.length > 0) {
