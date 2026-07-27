@@ -627,7 +627,7 @@ Output format rules:
 Required sections to produce:
 1. ------ROLE CONTEXT------
 2. ------COMPRESSOR INSTRUCTIONS------  (how to extract signals from resume text — write as bullet points, one signal type per bullet, NOT as a paragraph)
-3. ------EVALUATOR INSTRUCTIONS------  (how to score the signals — write as bullet points, one scoring rule per bullet, NOT as a paragraph)
+3. ------EVALUATOR INSTRUCTIONS------  (how to score the signals — write as bullet points, one scoring rule per bullet, NOT as a paragraph. Purely procedural — reference other sections by name, never restate their specific facts. See CRITICAL — NO DUPLICATE FACTS rule below.)
 4. ------HARD REQUIREMENTS------  (if any field is missing, auto-reject)
    Derive hard requirements from the dealbreakers field. Write each requirement as a short, direct rule — no "What / What counts / What does not count" breakdown. One line per requirement.- EXACTLY BASED ON WHAT THE USER TYPES IN IN THE DEALBREAKERS BOX
 5. ------FULL-TIME EXPERIENCE BAR------  (minimum **full-time** work experience thresholds — internships and part-time do not count unless explicitly noted)
@@ -647,8 +647,24 @@ Required sections to produce:
   Include only the sub-items whose policy field is present; apply each field's instruction exactly:
   (1) SENIORITY MISMATCH — include only if seniority_mismatch_policy is present. Use its value verbatim as the rejection rule.
   (2) **FULL-TIME** EXPERIENCE SURPLUS — include only if experience_surplus_policy is present. Use the exact threshold from experience_surplus_policy verbatim — do not substitute or paraphrase the years/months value. This counts full-time experience only.
-12. ------SCORING RUBRIC------  (decision tree: when to assign P0 vs P1 vs Reject)
+12. ------SCORING RUBRIC------  (decision tree: when to assign P0 vs P1 vs Reject. Purely procedural — reference other sections by name, never restate their specific facts. See CRITICAL — NO DUPLICATE FACTS rule below.)
 13. ------EVALUATION OUTPUT FORMAT------
+
+CRITICAL — NO DUPLICATE FACTS BETWEEN SECTIONS:
+------EVALUATOR INSTRUCTIONS------ and ------SCORING RUBRIC------ must NEVER restate a specific fact that already lives in Hard Requirements, Full-Time Experience Bar, P0 Criteria, P1 Criteria, or Red Flags — no repeated numbers, thresholds, years, months, tool/skill/framework names, company or college names, or domain names. Every concrete fact must exist in exactly ONE place in the whole prompt: its own dedicated section. This is not optional — a fact restated in two places will drift out of sync the moment either one is edited later, and a downstream model reading two different versions of "the same rule" will apply them inconsistently across candidates.
+
+Instead, these two sections must stay purely procedural — they describe ORDER and LOGIC ("check hard requirements first; if any fail, Reject regardless of other strengths; otherwise compare against P1 criteria, then P0 criteria") and may reference other sections BY NAME ("per Hard Requirements", "as stated in P0 Criteria above") — never by repeating what those sections say.
+
+Example of what NOT to write in EVALUATOR INSTRUCTIONS or SCORING RUBRIC:
+  ❌ "Reject candidates with full-time experience exceeding 5 years." (restates a Hard Requirements/Red Flags fact — the number 5 must only exist in Hard Requirements/Red Flags/Full-Time Experience Bar)
+  ❌ "ReactJS and Python backend usage must be evidenced beyond scripting." (restates a Hard Requirements fact — ReactJS/Python must only be named in Hard Requirements)
+  ❌ "HR Tech experience is required for P0 upgrade." (restates a P0 Criteria fact — HR Tech must only be named in P0 Criteria)
+Example of what TO write instead:
+  ✅ "Reject any candidate who fails a Hard Requirement, regardless of other strengths."
+  ✅ "Weigh technical depth per the specific skill bars defined in Hard Requirements — do not re-derive them here."
+  ✅ "Apply the domain/upgrade conditions exactly as written in P0 Criteria — do not restate them."
+
+This rule does NOT apply to the must_have / should_have / nice_to_have decision-tree logic described later in these instructions — that logic governs HOW tiers are decided from already-defined criteria, not what the criteria themselves say, and must still be encoded in SCORING RUBRIC as instructed there.
 
 The ------EVALUATION OUTPUT FORMAT------ section MUST contain exactly this instruction verbatim:
 

@@ -106,17 +106,44 @@ When HR provides a description (reject_reason), treat it as the root cause and t
 Example: HR says "lacks impact metrics" and targets P1 → add to P0: "Must show measurable impact (quantified outcomes, scale of work, business results) — impressive-sounding roles without evidence of impact do not qualify for P0."
 Example: HR targets Baseline and says "we should accept 1 year experience, not 2" → update the hard-requirements section to reflect the corrected minimum.
 
+CONTRADICTION RESOLUTION — HIGHEST PRIORITY, READ BEFORE EDITING:
+What HR typed is the new ground truth for the specific criterion it addresses. It OVERRIDES whatever the prompt currently says about that criterion — it does not sit alongside it.
+
+IMPORTANT: hr_target is the rating HR believes is correct — it is NOT automatically the section you edit. Find whichever section — Hard Requirements, P0 criteria, P1 criteria, or Red Flags — actually contains the line responsible for the AI's original decision and that HR's correction contradicts. This is often NOT the section matching hr_target: e.g. if the AI said Reject because a Hard Requirement wasn't met, and HR says the correct outcome is P1, the fix usually belongs in Hard Requirements (loosen the specific requirement that caused the reject) — not in the P1 criteria section.
+
+WHEN HR'S DESCRIPTION CONTAINS "X, NOT Y" OR "NOW X, PREVIOUSLY Y" PHRASING:
+The value immediately after "not" / "previously" is the OLD value being corrected away from — never write it into the prompt. The other value is the corrected one. Read the full sentence carefully before editing; do not default to whichever number or value appears first or last in the sentence.
+
+WHEN HR MAKES A SKILL OR TOOL NON-NEGOTIABLE WITH NO SUBSTITUTE:
+If the existing text allows alternatives ("X or comparable Y", "X or similar tools") and HR says X specifically is mandatory with no substitute accepted, remove the "or comparable" language entirely — the requirement must name only X. Additionally, ensure this becomes a Hard Requirement (Reject trigger if missing), not merely a P0/P1 qualifier, if HR indicated missing it should cause rejection.
+When you promote something to a Hard Requirement this way, you MUST also fix the P0/P1 line(s) it came from — remove that P0/P1 line if it now only restates the hard requirement, or reword it so it no longer describes the same skill as optional/substitutable ("X or comparable Y") once X alone is mandatory elsewhere. Never leave the promoted skill described as substitutable in one place while a Hard Requirement makes it mandatory in another — that is the exact kind of contradiction this section exists to prevent.
+
+Before you write anything:
+1. Trace the AI's original decision back to the specific existing line that caused it, wherever that line lives.
+2. SEARCH THE ENTIRE PROMPT, NOT JUST THAT ONE LINE: the same underlying constraint is often written in more than one place (e.g., an experience threshold repeated in both Hard Requirements and Red Flags with different wording). Find every line anywhere in the prompt that expresses the same criterion HR is correcting.
+3. If any of those lines set a different or stricter bar than what HR just described, REPLACE every one of them with the corrected version. Do not leave even one old, contradicting line in place — a contradiction left in a single section undoes the correction everywhere else.
+4. Leave every line that does NOT relate to the corrected criterion completely untouched, in every section.
+5. Only append a brand-new line when nothing existing addresses that criterion at all — and when you do, insert it INSIDE the correct existing section, as a new numbered/bulleted item in that section's existing list. Never create a new section header to hold it.
+6. NEVER let two lines anywhere in the prompt state conflicting bars for the same underlying criterion. A downstream model reading both will apply them inconsistently across candidates. Every contradiction must be resolved by replacing the old line(s) — never by stacking a new one on top of it.
+
+NEVER INVENT NEW SECTION HEADERS — CRITICAL STRUCTURAL RULE:
+The evaluator prompt you are editing uses ONLY these section headers, and you may use ONLY these — never any other: ------ROLE CONTEXT------, ------COMPRESSOR INSTRUCTIONS------, ------EVALUATOR INSTRUCTIONS------, ------HARD REQUIREMENTS------, ------FULL-TIME EXPERIENCE BAR------, ------SIGNAL QUALITY------, ------P0 CRITERIA — EXCEPTIONAL------, ------P1 CRITERIA — INTERVIEW WORTHY------, ------RED FLAGS------, ------SCORING RUBRIC------, ------EVALUATION OUTPUT FORMAT------.
+Every edit you make must be merged directly into whichever of these headers already exists in the input prompt — as an edited or added line within that section's existing numbered/bulleted list. Do NOT create headers like "------ADDED REJECTION TRIGGER FOR X------", "------UPDATED HARD REQUIREMENT N------", "------NEW CRITERION------", or any other header that describes what you changed. A header like that is a changelog entry, not part of a hiring rubric — no downstream system recognizes it, it will never be read correctly again, and it duplicates whatever content already exists in the real section.
+Return the COMPLETE evaluator prompt with your edits woven invisibly into their correct existing sections. The output must read exactly like a prompt that was written this way from scratch — never like a diff, changelog, or a list of "added/updated" fragments layered on top.
+
 Rules:
 - Look for patterns across multiple disagreements rather than reacting to each in isolation
 - Do NOT change the overall structure of the prompt, but add or reword criteria where needed
 - Do NOT change the output format (rating, score, reasoning, reject_reason, concerns must all stay)
 - Focus on the actual work done and descriptions, not just job titles or company names
 - Changes must be targeted and minimal — do not rewrite sections that are working
+- When a contradiction exists between existing wording and HR's correction, resolving it takes priority over "minimal changes" — replace every conflicting line, wherever it appears, even if that means touching more text than usual
 
 Return ONLY valid JSON with a single key "evaluator_prompt" containing the revised prompt string.
 No markdown. No explanation.`;
 
 const CONCURRENCY = 6;
+const TASTE_CHECK_CONCURRENCY = 10;
 
 // ── Cost tracking ─────────────────────────────────────────────────────────────
 const PRICING: Record<string, { input: number; output: number }> = {
@@ -464,6 +491,68 @@ router.post("/generate-clarifying-questions", async (req: Request, res: Response
   }
 });
 
+const APPLY_CLARIFYING_ANSWERS_PROMPT = `You are precisely editing a piece of hiring criteria text to incorporate clarifying answers the hiring manager just gave.
+
+You will receive the current text (a paragraph of hiring criteria) and one or more clarifications, each with: the exact vague phrase from the text, the question that was asked about it, and the answer the hiring manager chose or typed.
+
+Some answers combine multiple selected options joined by the literal separator " ... AND ... " — e.g. "Owned feature design ... AND ... Owned deployment". This means the hiring manager wants BOTH conditions to apply together. Rephrase these naturally when inserting them (e.g., "where they have owned both feature design and deployment") — never paste the literal " ... AND ... " separator into the output text.
+
+Your job: insert each answer as a qualifier immediately after its corresponding vague phrase, in the form "{phrase} where they have {answer}" — rephrasing minimally only for grammatical correctness (tense, plurality, combining AND-joined answers naturally as above), never changing the substance of the answer.
+
+CRITICAL RULES:
+- Do NOT change, remove, reword, reorder, or summarize any other part of the text. Every sentence not tied to a clarified phrase must stay identical.
+- Do NOT merge sentences or add transitions between unrelated parts of the text.
+- If a vague phrase appears verbatim in the text, splice the answer directly after it, in place.
+- If a vague phrase does not appear verbatim (paraphrased differently), find the specific clause it clearly refers to and attach the answer there only — never at the end of the whole text.
+- Apply every clarification given, each in its own correct position.
+- Preserve original punctuation and paragraph structure except for the inserted qualifiers.
+
+Return ONLY valid JSON: { "text": "the full updated paragraph" }
+No markdown. No explanation.`;
+
+router.post("/apply-clarifying-answers", async (req: Request, res: Response) => {
+  const { text, answers } = req.body as {
+    field: "p0" | "p1" | "dealbreakers";
+    text: string;
+    answers: { vague_phrase: string; question: string; answer: string }[];
+  };
+
+  if (!text?.trim() || !answers?.length) {
+    return res.status(400).json({ error: "text and answers are required." });
+  }
+
+  let client: OpenAI;
+  try { client = getClient(); } catch (e: any) { return res.status(500).json({ error: e.message }); }
+
+  const clarificationsBlock = answers
+    .map((a, i) => `${i + 1}. Vague phrase: "${a.vague_phrase}"\n   Question asked: "${a.question}"\n   HR's answer: "${a.answer}"`)
+    .join("\n");
+
+  const userMessage = `Current text:\n${text}\n\nClarifications:\n${clarificationsBlock}`;
+
+  try {
+    const completion = await client.chat.completions.create({
+      model: "gpt-4.1-mini",
+      messages: [
+        { role: "system", content: APPLY_CLARIFYING_ANSWERS_PROMPT },
+        { role: "user", content: userMessage },
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0,
+    });
+
+    trackCost("Apply Clarifying Answers", "Step 1 — Setup", "gpt-4.1-mini", completion.usage?.prompt_tokens ?? 0, completion.usage?.completion_tokens ?? 0);
+    const raw = completion.choices[0].message.content ?? "{}";
+    const parsed = JSON.parse(raw);
+    if (typeof parsed.text !== "string" || !parsed.text.trim()) {
+      return res.status(500).json({ error: "Model did not return updated text", raw_response: raw });
+    }
+    return res.json({ text: parsed.text });
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message ?? "Failed to apply clarifying answers" });
+  }
+});
+
 router.post("/check-p0-p1-similarity", async (req: Request, res: Response) => {
   const { p0_text, p1_text } = req.body as { p0_text?: string; p1_text?: string };
   if (!p0_text?.trim() || !p1_text?.trim()) return res.json({ too_similar: false, reason: "" });
@@ -671,7 +760,12 @@ router.post("/bulk-screen-stream", async (req: Request, res: Response) => {
   let totalOutput = 0;
   const MODEL = "gpt-4.1-mini";
 
-  await runConcurrent(resumes, CONCURRENCY, async (resume) => {
+  // Taste-check batches (calibration sample selection, top-ups) get a higher
+  // concurrency since they're small, latency-sensitive, interactive-review batches —
+  // full-pool screening keeps the conservative default to avoid rate-limit risk at scale.
+  const concurrency = label.startsWith("TASTE CHECK") ? TASTE_CHECK_CONCURRENCY : CONCURRENCY;
+
+  await runConcurrent(resumes, concurrency, async (resume) => {
     try {
       const compressRes = await client.chat.completions.create({
         model: MODEL,

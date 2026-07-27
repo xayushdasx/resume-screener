@@ -121,6 +121,19 @@ export async function generateClarifyingQuestions(
   return safeJson(res);
 }
 
+export async function applyClarifyingAnswers(
+  field: "p0" | "p1" | "dealbreakers",
+  text: string,
+  answers: { vague_phrase: string; question: string; answer: string }[]
+): Promise<{ text: string; error?: string }> {
+  const res = await fetch(`${BASE}/apply-clarifying-answers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ field, text, answers }),
+  });
+  return safeJson(res);
+}
+
 export async function checkCriteriaVagueness(
   field: "P0" | "P1",
   text: string,

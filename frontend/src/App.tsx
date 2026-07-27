@@ -13,7 +13,7 @@ import { SendShortlistModal } from "./SendShortlistModal";
 import type { ShortlistEntry } from "./SendShortlistModal";
 import { CreateRole } from "./CreateRole";
 import type { ATSRole, ATSCandidate } from "./RolesList";
-import { generatePrompt, generateJd, uploadPdf, parseEvaluatorPrompt, recalibratePrompt, bulkScreenStream, buildEvaluatorFromCriteria, screenAndSampleStream, bulkEvalStream, dynamicTweakPrompt, compressEvalPrompt, checkCriteriaVagueness, generateClarifyingQuestions, createShare, getShare, updateShare, uploadShareFiles, getShareFileUrl, rankCandidatesStream, checkP0P1Similarity, selectDiverseSample } from "./api";
+import { generatePrompt, generateJd, uploadPdf, parseEvaluatorPrompt, recalibratePrompt, bulkScreenStream, buildEvaluatorFromCriteria, screenAndSampleStream, bulkEvalStream, dynamicTweakPrompt, compressEvalPrompt, checkCriteriaVagueness, generateClarifyingQuestions, applyClarifyingAnswers, createShare, getShare, updateShare, uploadShareFiles, getShareFileUrl, rankCandidatesStream, checkP0P1Similarity, selectDiverseSample } from "./api";
 import type { CompressedView } from "./api";
 import type { GeneratePromptResponse, TestResumeResponse } from "./types";
 import { idbSaveFile, idbGetFile } from "./idbFiles";
@@ -703,8 +703,6 @@ function ClarifyingQuestionsModal({
   const isAnswered = (qId: string) =>
     (freeTextOpen[qId] && !!freeText[qId]?.trim()) || (!freeTextOpen[qId] && (answers[qId]?.length ?? 0) > 0);
 
-  const allAnswered = questions.every(q => isAnswered(q.id));
-
   const handleSelect = (qId: string, opt: string) => {
     setFreeTextOpen(prev => ({ ...prev, [qId]: false }));
     setAnswers(prev => {
@@ -794,8 +792,7 @@ function ClarifyingQuestionsModal({
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!allAnswered}
-            className="flex items-center gap-2 bg-neutral-900 hover:bg-neutral-800 text-white text-sm font-medium px-6 py-2.5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="flex items-center gap-2 bg-neutral-900 hover:bg-neutral-800 text-white text-sm font-medium px-6 py-2.5 transition-colors"
           >
             Apply answers <ArrowRight className="w-4 h-4" />
           </button>
@@ -1594,6 +1591,13 @@ export default function App() {
   useEffect(() => { criteriaRef.current = criteria; }, [criteria]);
 
   const [preScreenedResults, setPreScreenedResults] = useState<any[]>([]);
+  const preScreenedResultsRef = useRef(preScreenedResults);
+  useEffect(() => { preScreenedResultsRef.current = preScreenedResults; }, [preScreenedResults]);
+  // Set by recalibration whenever the pool has been scored under a now-stale prompt.
+  // handleNextBatch checks this and catches the pool up before selecting from it —
+  // never while the HR is still reviewing the current batch, only at the natural
+  // "loading next batch" wait that already happens between batches.
+  const poolDirtyRef = useRef(false);
 
   // Debounced P0/P1 similarity check via LLM
   useEffect(() => {
@@ -1962,16 +1966,33 @@ export default function App() {
     const base = clarifyPendingCriteria ?? criteria;
     if (!base) return;
     const qs = clarifyingQuestions ?? [];
-    const join = (field: "p0" | "p1" | "dealbreakers") =>
-      qs.filter(q => q.field === field).map(q => answers[q.id]).filter(Boolean).join(". ");
-    const p0extra = join("p0");
-    const p1extra = join("p1");
-    const dbextra = join("dealbreakers");
+    // For each answered field, ask the model to splice each answer in right where its
+    // vague phrase actually occurs, rather than dumping every answer at the end of the
+    // paragraph. Falls back to the old append-at-end behavior if that call fails.
+    const resolveField = async (field: "p0" | "p1" | "dealbreakers", text: string): Promise<string> => {
+      const fieldAnswers = qs
+        .filter(q => q.field === field && answers[q.id])
+        .map(q => ({ vague_phrase: q.vague_phrase ?? "", question: q.question, answer: answers[q.id] }));
+      if (fieldAnswers.length === 0) return text;
+      try {
+        const result = await applyClarifyingAnswers(field, text, fieldAnswers);
+        if (result.error || !result.text) throw new Error(result.error ?? "empty response");
+        return result.text;
+      } catch {
+        const joined = fieldAnswers.map(a => a.answer).join(". ");
+        return text + (joined ? ` ${joined}.` : "");
+      }
+    };
+    const [newP0, newP1, newDb] = await Promise.all([
+      resolveField("p0", base.p0_text),
+      resolveField("p1", base.p1_text),
+      resolveField("dealbreakers", base.dealbreakers),
+    ]);
     const enhanced: CriteriaState = {
       ...base,
-      p0_text: base.p0_text + (p0extra ? ` ${p0extra}.` : ""),
-      p1_text: base.p1_text + (p1extra ? ` ${p1extra}.` : ""),
-      dealbreakers: base.dealbreakers + (dbextra ? ` ${dbextra}.` : ""),
+      p0_text: newP0,
+      p1_text: newP1,
+      dealbreakers: newDb,
     };
     setCriteria(enhanced);
     if (clarifyPendingField) {
@@ -2165,12 +2186,17 @@ export default function App() {
     setTasteResults(prev => prev.map(r => ({ ...r, result: null, error: undefined })));
     setFeedback({});
 
+    // /bulk-eval-stream doesn't echo signal_json back — carry the original forward
+    // so re-evaluated results don't lose it (toTasteResult would otherwise default to {}).
+    const signalByFilename = new Map(candidates.map(c => [c.filename, c.signal_json]));
+
     try {
       const stream = bulkEvalStream(candidates, newEvaluatorPrompt);
       for await (const event of stream) {
         if (event.type === "result") {
           const d = event.data;
           const tr = toTasteResult(d);
+          if (tr.result) tr.result.signal_json = signalByFilename.get(d.filename) ?? tr.result.signal_json;
           setTasteResults(prev => prev.map(r => r.filename === d.filename ? { ...tr, filename: r.filename } : r));
           setTasteProgress({ phase: "Re-evaluating with new criteria", done: event.completed, total: event.total });
         }
@@ -2181,15 +2207,61 @@ export default function App() {
     }
   };
 
+  // Re-evaluate a pre-screened pool against a (possibly newer) evaluator prompt and
+  // return the updated array — pure, no state writes. Called from handleNextBatch,
+  // at the exact moment the HR is already waiting on "loading next batch", never
+  // while they're still reviewing the current one.
+  const reEvalPreScreenedPool = async (newEvaluatorPrompt: string, poolToEval: any[]): Promise<any[]> => {
+    const candidates = poolToEval.filter((d: any) => d.signal_json && d.rating !== "Error");
+    if (candidates.length === 0) return poolToEval;
+
+    const updates = new Map<string, any>();
+    const stream = bulkEvalStream(
+      candidates.map((d: any) => ({ filename: d.filename, name: d.name, email: d.email ?? null, phone: d.phone ?? null, signal_json: d.signal_json })),
+      newEvaluatorPrompt
+    );
+    for await (const event of stream) {
+      if (event.type === "result") {
+        updates.set(event.data.filename, event.data);
+      }
+    }
+
+    return poolToEval.map((d: any) => {
+      const u = updates.get(d.filename);
+      if (!u) return d;
+      // signal_json isn't echoed back by /bulk-eval-stream — keep the original.
+      return { ...d, rating: u.rating, score: u.score, reject_reason: u.reject_reason, reasoning: u.reasoning, concerns: u.concerns };
+    });
+  };
+
   const handleNextBatch = async () => {
     if (!paramsDataRef.current || evaluatingTaste) return;
 
-    const unscreened = parsedResumes.filter(r => !evaluatedFilenames.has(r.filename));
     // Note: preScreenedResults already excludes candidates selected into a review batch
     // (see runDiverseBatch/handleNextBatch below) — do NOT filter it by evaluatedFilenames,
     // since every screened resume (including these leftovers) is added to evaluatedFilenames
     // up front, before batch selection happens. Filtering here would wrongly empty the pool.
-    let pool = [...preScreenedResults];
+    let pool = preScreenedResultsRef.current;
+
+    // If a recalibration happened since this pool was last scored, catch it up now —
+    // right here is the moment the HR is already waiting on "loading next batch," so
+    // this is the only place that time should ever be spent, never mid-review.
+    if (poolDirtyRef.current) {
+      poolDirtyRef.current = false;
+      if (pool.length > 0) {
+        setEvaluatingTaste(true);
+        setTasteProgress({ phase: "Applying latest criteria to remaining pool", done: 0, total: pool.length });
+        try {
+          pool = await reEvalPreScreenedPool(paramsDataRef.current.evaluator_prompt, pool);
+          setPreScreenedResults(pool);
+        } finally {
+          setTasteProgress(null);
+          setEvaluatingTaste(false);
+        }
+      }
+    }
+
+    const unscreened = parsedResumes.filter(r => !evaluatedFilenames.has(r.filename));
 
     // If pool has fewer than 5, top it up by screening 5 more from unscreened (not 20)
     if (pool.length < 5 && unscreened.length > 0) {
@@ -2206,12 +2278,21 @@ export default function App() {
       for await (const event of bulkScreenStream(
         toAdd.map(r => ({ text: r.text, filename: r.filename })),
         paramsDataRef.current.compressor_prompt,
-        paramsDataRef.current.evaluator_prompt
+        paramsDataRef.current.evaluator_prompt,
+        "TASTE CHECK — Top Up"
       )) {
         if (event.type === "result") {
-          newResults.push(event);
+          const d = event.data;
+          newResults.push(d);
           done++;
           setTasteProgress({ phase: "Screening more resumes", done, total: toAdd.length });
+          if (d.signal_json && d.rating !== "Error") {
+            setTasteCandidatePool(prev =>
+              prev.find(c => c.filename === d.filename)
+                ? prev
+                : [...prev, { filename: d.filename, name: d.name, email: d.email ?? null, phone: d.phone ?? null, signal_json: d.signal_json, college_name: (d.signal_json as any)?.college_name, college_tier: (d.signal_json as any)?.college_tier }]
+            );
+          }
         }
       }
       pool = [...pool, ...newResults.filter(d => d.signal_json && d.rating !== "Error")];
@@ -2376,6 +2457,10 @@ export default function App() {
           .finally(() => setCompressingView(false));
         // Re-evaluate current batch with new prompt
         await reEvalCurrentBatch(newPrompt, currentBatchFilenames, tasteCandidatePool);
+        // Mark the leftover pool stale — handleNextBatch will catch it up against the
+        // latest prompt right before selecting from it, at the natural batch-transition
+        // wait, instead of spending time on it while the HR is still on this batch.
+        poolDirtyRef.current = true;
       }
     } catch (e: any) {
       setRecalibrateError(e.message ?? "Failed to recalibrate");
