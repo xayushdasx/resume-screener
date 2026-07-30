@@ -1704,7 +1704,11 @@ export default function App() {
     if (!file) { setPdfUrl(null); return; }
     const url = URL.createObjectURL(file);
     setPdfUrl(url);
-    return () => URL.revokeObjectURL(url);
+    // Delay revocation instead of revoking immediately on cleanup — PdfViewer loads
+    // the blob asynchronously via pdfjs, and revoking too early (e.g. while quickly
+    // advancing between resumes) races that in-flight load and breaks it, showing
+    // "Could not load PDF" even though the file itself is fine.
+    return () => { setTimeout(() => URL.revokeObjectURL(url), 5000); };
   }, [reviewIndex, tasteResults, tasteResumes]);
 
   // Criteria auto-debounce removed — evaluator prompt only builds on explicit "Apply Changes" click

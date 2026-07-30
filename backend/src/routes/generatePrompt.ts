@@ -132,7 +132,10 @@ Target output: under 400 tokens.
 
 The compressor_prompt must instruct the model to extract:
 - name, email, phone, total_experience_months, internship_experience_months, fulltime_experience_months, education (degree, institution, year)
-  internship_experience_months: sum of duration_months for any work_history entry whose role title contains "intern", "internship", "trainee", or "apprentice" (case-insensitive). fulltime_experience_months: total_experience_months minus internship_experience_months (minimum 0).
+  internship_experience_months: sum of duration_months across EVERY work_history entry whose role title contains "intern", "internship", "trainee", or "apprentice" (case-insensitive) — sum ALL matching entries, not just one.
+  fulltime_experience_months: sum of duration_months across EVERY work_history entry that does NOT match the internship pattern above — computed by direct summation of those entries, NEVER as "total_experience_months minus internship_experience_months". Deriving it by subtraction hides extraction errors instead of catching them.
+  total_experience_months: internship_experience_months + fulltime_experience_months (a sum of the two figures above, computed last, for reference only — fulltime_experience_months is what hard requirements and experience thresholds actually check against).
+  CRITICAL — SEQUENTIAL PROMOTIONS AT THE SAME COMPANY: resumes frequently list multiple job titles at the same company/client as separate blocks with their own date ranges (e.g. Analyst → Senior Analyst → Engineer, same employer, three consecutive periods — this is a promotion history, not one job restated three times). Extract EACH title/date-range block as its OWN separate work_history entry with its own duration_months, and include every one of them in the fulltime_experience_months sum. Do NOT deduplicate by company name, and do NOT count only the most recent or most senior title — every distinct block that appears on the resume must contribute its own duration_months to the total.
 - work_history: [{company, role, duration_months, key_signals[], ownership_language, impact_evidence}]
   COLLEGE ACTIVITY EXCLUSION- BASICALLY STUDENTS WHO ARE WORKING IN CLUBS, SOCIETIES AND ALL(People employed in that college as a full time employee or intern is totally fine)— apply this test to every role before extracting it:
     "Could this organisation exist and operate without this college?"
@@ -611,7 +614,7 @@ When the criteria include free-text fields, interpret them as follows:
 - "p1_text": the hiring manager's description of the interview-worthy bar. Use this to populate the ------P1 CRITERIA------ section.
 - "dealbreakers": the hiring manager's description of hard disqualifiers. Use this to populate ------HARD REQUIREMENTS------ and ------RED FLAGS------.
 - "skills": array of relevant skills. Strong match = P0 signal; partial match = P1 signal; complete absence of required skills = Reject trigger if they appear in dealbreakers.
-- "seniority" and "min_experience_months": use to set the ------FULL-TIME EXPERIENCE BAR------.
+- "seniority" and "min_experience_months": use to set the ------HIGH-PRIORITY HARD CRITERIA------.
 
 
 The evaluator prompt you produce will be used by an AI to score resumes as P0 (exceptional), P1 (interview-worthy), or Reject.
@@ -627,14 +630,21 @@ Output format rules:
 Required sections to produce:
 1. ------ROLE CONTEXT------
 2. ------COMPRESSOR INSTRUCTIONS------  (how to extract signals from resume text — write as bullet points, one signal type per bullet, NOT as a paragraph)
-3. ------EVALUATOR INSTRUCTIONS------  (how to score the signals — write as bullet points, one scoring rule per bullet, NOT as a paragraph. Purely procedural — reference other sections by name, never restate their specific facts. See CRITICAL — NO DUPLICATE FACTS rule below.)
-4. ------HARD REQUIREMENTS------  (if any field is missing, auto-reject)
+3. ------EVALUATOR INSTRUCTIONS------  (how to score the signals — write as bullet points, one scoring rule per bullet, NOT as a paragraph. Purely procedural — reference other sections by name, never restate their specific facts. See CRITICAL — NO DUPLICATE FACTS rule below. State explicitly: check High-Priority Hard Criteria FIRST — reject immediately if not met, before evaluating Hard Requirements or anything else.)
+4. ------HIGH-PRIORITY HARD CRITERIA------  (evaluated FIRST, before Hard Requirements — reject immediately if not met, regardless of anything else about the candidate)
+   This section contains ONLY date, duration, and tenure facts — nothing else belongs here:
+   - Minimum full-time work experience threshold (from min_experience_months / seniority)
+   - Maximum full-time experience threshold / seniority-surplus cap (from experience_surplus_policy)
+   - OTHER TIME/DURATION RELATED THINGS LIKE AVAILABILITY IS NOT TO COME UP HERE, IT GOES INTO HARD REQUIREMENTS
+   - The fresher/internship exception (from fresher_policy — injected verbatim, see below)- DON"T INJECT ANYTHING ABOUT THIS LINE IF NO OPTION IS CHOSEN OR IS PROVIDED. if fresher_policy is not provided, omit this line
+   No Seniority, skills, tools, pedigree, domain facts, or non-date criteria may appear in this section — those belong in Hard Requirements instead.
+5. ------HARD REQUIREMENTS------  (if any field is missing, auto-reject)
    Derive hard requirements from the dealbreakers field. Write each requirement as a short, direct rule — no "What / What counts / What does not count" breakdown. One line per requirement.- EXACTLY BASED ON WHAT THE USER TYPES IN IN THE DEALBREAKERS BOX
-5. ------FULL-TIME EXPERIENCE BAR------  (minimum **full-time** work experience thresholds — internships and part-time do not count unless explicitly noted)
-8. ------SIGNAL QUALITY------  (how to interpret vague or thin resumes)
-9. ------P0 CRITERIA — EXCEPTIONAL------  (reproduce the hiring manager's p0_text faithfully — do NOT add "ALL of these", "any of these", or any threshold modifier. Present the criteria exactly as written.)
-10. ------P1 CRITERIA — INTERVIEW WORTHY------  (reproduce the hiring manager's p1_text faithfully — do NOT add "ALL of these", "any of these", or any threshold modifier. Present the criteria exactly as written.)
-11. ------RED FLAGS------  (these push toward Reject)
+   CRITICAL: this section must NEVER contain a month/year/date/tenure threshold, even if the hiring manager's dealbreakers text mentions one — any experience-duration fact belongs exclusively in ------HIGH-PRIORITY HARD CRITERIA------ instead. Everything else (skills, tools, pedigree, domain requirements) stays here.
+6. ------SIGNAL QUALITY------  (how to interpret vague or thin resumes)
+7. ------P0 CRITERIA — EXCEPTIONAL------  (reproduce the hiring manager's p0_text faithfully — do NOT add "ALL of these", "any of these", or any threshold modifier. Present the criteria exactly as written.)
+8. ------P1 CRITERIA — INTERVIEW WORTHY------  (reproduce the hiring manager's p1_text faithfully — do NOT add "ALL of these", "any of these", or any threshold modifier. Present the criteria exactly as written.)
+9. ------RED FLAGS------  (these push toward Reject)
   ADJACENT ROLES subsection: Include ONLY IF adjacent_roles_policy is present in the criteria. If absent, omit this subsection entirely — do NOT write "N/A".
   When adjacent_roles_policy is present, derive the adjacent role list dynamically from the role title. Examples:
   - "Product Manager" → adjacent: Product Analyst, Product Designer, UX Researcher, Business Analyst, Program Manager, Project Manager, Product Marketing Manager
@@ -643,20 +653,19 @@ Required sections to produce:
   - "Sales" → adjacent: Marketing, Account Management (no quota), Customer Success
   Apply adjacent_roles_policy instruction exactly: "Candidates whose primary background is in adjacent roles (e.g., [derived list]) with zero direct [role_title] experience must be [REJECTED per policy / flagged as concern per policy]."
 
-  OVERQUALIFICATION subsection: Include ONLY IF any of these policy fields are present: seniority_mismatch_policy, experience_surplus_policy. If NEITHER is present, omit this subsection entirely — do NOT write "N/A".
-  Include only the sub-items whose policy field is present; apply each field's instruction exactly:
-  (1) SENIORITY MISMATCH — include only if seniority_mismatch_policy is present. Use its value verbatim as the rejection rule.
-  (2) **FULL-TIME** EXPERIENCE SURPLUS — include only if experience_surplus_policy is present. Use the exact threshold from experience_surplus_policy verbatim — do not substitute or paraphrase the years/months value. This counts full-time experience only.
-12. ------SCORING RUBRIC------  (decision tree: when to assign P0 vs P1 vs Reject. Purely procedural — reference other sections by name, never restate their specific facts. See CRITICAL — NO DUPLICATE FACTS rule below.)
-13. ------EVALUATION OUTPUT FORMAT------
+  SENIORITY MISMATCH subsection: Include ONLY IF seniority_mismatch_policy is present. If absent, omit this subsection entirely — do NOT write "N/A". Use its value verbatim as the rejection rule. This is a title/level-based signal (e.g. "most recent title is 2+ levels above target seniority"), NOT a date/tenure fact — it stays here, not in High-Priority Hard Criteria.
+  Do NOT include an experience-surplus/overqualification-by-years rule here — that is a date/tenure fact and belongs exclusively in ------HIGH-PRIORITY HARD CRITERIA------ (see experience_surplus_policy handling above).
+10. ------SCORING RUBRIC------  (decision tree: when to assign P0 vs P1 vs Reject. Purely procedural — reference other sections by name, never restate their specific facts. See CRITICAL — NO DUPLICATE FACTS rule below. Must state that High-Priority Hard Criteria is checked before Hard Requirements.)
+11. ------EVALUATION OUTPUT FORMAT------
 
 CRITICAL — NO DUPLICATE FACTS BETWEEN SECTIONS:
-------EVALUATOR INSTRUCTIONS------ and ------SCORING RUBRIC------ must NEVER restate a specific fact that already lives in Hard Requirements, Full-Time Experience Bar, P0 Criteria, P1 Criteria, or Red Flags — no repeated numbers, thresholds, years, months, tool/skill/framework names, company or college names, or domain names. Every concrete fact must exist in exactly ONE place in the whole prompt: its own dedicated section. This is not optional — a fact restated in two places will drift out of sync the moment either one is edited later, and a downstream model reading two different versions of "the same rule" will apply them inconsistently across candidates.
+------EVALUATOR INSTRUCTIONS------ and ------SCORING RUBRIC------ must NEVER restate a specific fact that already lives in High-Priority Hard Criteria, Hard Requirements, P0 Criteria, P1 Criteria, or Red Flags — no repeated numbers, thresholds, years, months, tool/skill/framework names, company or college names, or domain names. Every concrete fact must exist in exactly ONE place in the whole prompt: its own dedicated section. This is not optional — a fact restated in two places will drift out of sync the moment either one is edited later, and a downstream model reading two different versions of "the same rule" will apply them inconsistently across candidates.
+This especially applies to date/duration/tenure facts: a minimum-experience, maximum-experience, or fresher-exception threshold must exist ONLY in ------HIGH-PRIORITY HARD CRITERIA------ — never also in Hard Requirements, Red Flags, or anywhere else, even worded differently.
 
 Instead, these two sections must stay purely procedural — they describe ORDER and LOGIC ("check hard requirements first; if any fail, Reject regardless of other strengths; otherwise compare against P1 criteria, then P0 criteria") and may reference other sections BY NAME ("per Hard Requirements", "as stated in P0 Criteria above") — never by repeating what those sections say.
 
 Example of what NOT to write in EVALUATOR INSTRUCTIONS or SCORING RUBRIC:
-  ❌ "Reject candidates with full-time experience exceeding 5 years." (restates a Hard Requirements/Red Flags fact — the number 5 must only exist in Hard Requirements/Red Flags/Full-Time Experience Bar)
+  ❌ "Reject candidates with full-time experience exceeding 5 years." (restates a High-Priority Hard Criteria fact — the number 5 must only exist in High-Priority Hard Criteria)
   ❌ "ReactJS and Python backend usage must be evidenced beyond scripting." (restates a Hard Requirements fact — ReactJS/Python must only be named in Hard Requirements)
   ❌ "HR Tech experience is required for P0 upgrade." (restates a P0 Criteria fact — HR Tech must only be named in P0 Criteria)
 Example of what TO write instead:
@@ -694,8 +703,10 @@ Encode these thresholds explicitly in the SCORING RUBRIC section of the generate
 - Do NOT invent "ALL of these" or "any of these" logic on top of what the hiring manager wrote. The P0 and P1 criteria sections are the hiring manager's own words — evaluate against them as written.
 
 When fresher_policy is provided in the criteria:
-- The fresher_policy field contains a pre-computed, ready-to-use instruction. Copy it VERBATIM into the ------FULL-TIME EXPERIENCE BAR------ section of the generated prompt. Do NOT paraphrase, summarize, reinterpret, or add to it.
+- The fresher_policy field contains a pre-computed, ready-to-use instruction. Copy it VERBATIM into the ------HIGH-PRIORITY HARD CRITERIA------ section of the generated prompt. Do NOT paraphrase, summarize, reinterpret, or add to it.
 - Do NOT add any additional fresher notes, caveats, or restrictions beyond what fresher_policy literally says.
+
+When experience_surplus_policy is provided in the criteria, copy it into ------HIGH-PRIORITY HARD CRITERIA------ (not Red Flags) — this is the maximum-experience/seniority-surplus date threshold and belongs exclusively in that section per the rule above.
 
 When non_work_weight is provided in the criteria, add a rule in the SIGNAL QUALITY or SCORING RUBRIC section of the generated prompt that applies to any entries flagged as non_work_entries (courses, bootcamps, fellowships, career breaks, research programs):
 - "ignore": Do not count these toward experience at all. If a candidate's only experience is non-work entries, treat them as having zero work experience.
@@ -951,9 +962,9 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
       .replace(/<<TIER1_COMPANIES>>/g, TIER1_COMPANIES)
       .replace(/<<TIER2_COMPANIES>>/g, TIER2_COMPANIES);
 
-    // Inject fresher exception directly into FULL-TIME EXPERIENCE BAR section (no LLM involvement)
+    // Inject fresher exception directly into HIGH-PRIORITY HARD CRITERIA section (no LLM involvement)
     if (fresherInjectionText) {
-      const FT_MARKER = "------FULL-TIME EXPERIENCE BAR------";
+      const FT_MARKER = "------HIGH-PRIORITY HARD CRITERIA------";
       const ftIdx = built.indexOf(FT_MARKER);
       if (ftIdx !== -1) {
         // Find start of the next section (next ------...------ marker after this one)
@@ -964,8 +975,8 @@ router.post("/build-evaluator-prompt", async (req: Request, res: Response) => {
           built = built + fresherInjectionText;
         }
       } else {
-        // No FULL-TIME EXPERIENCE BAR section found — append as its own section
-        built = built + "\n\n------FULL-TIME EXPERIENCE BAR — FRESHER EXCEPTION------" + fresherInjectionText;
+        // No HIGH-PRIORITY HARD CRITERIA section found — append as its own section
+        built = built + "\n\n------HIGH-PRIORITY HARD CRITERIA — FRESHER EXCEPTION------" + fresherInjectionText;
       }
     }
 

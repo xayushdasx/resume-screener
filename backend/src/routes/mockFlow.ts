@@ -100,16 +100,20 @@ HOW TO USE hr_target FOR TARGETED EDITS:
 - AI said P1, HR target is P0 → the P0 bar is too strict for candidates like this. Loosen or clarify P0 criteria so candidates with the described strengths qualify.
 - AI said P1, HR target is Reject → tighten the minimum bar. What HR described should become a rejection trigger or hard requirement in the non-negotiables section.
 - AI said Reject, HR target is P0/P1 → the rejection was too aggressive. Loosen the specific hard requirement or non-negotiable that caused the over-rejection.
-- Any target "Baseline" → the non-negotiable / hard-requirement criteria is wrong for this case. Based on HR's description, either: (a) a hard requirement is too strict and should be relaxed or removed, or (b) a missing hard requirement needs to be added. Edit the non-negotiables section specifically — do NOT touch P0/P1 criteria.
+- Any target "Baseline" → the non-negotiable / hard-requirement criteria is wrong for this case. Based on HR's description, either: (a) a hard requirement is too strict and should be relaxed or removed, or (b) a missing hard requirement needs to be added. Edit the non-negotiables section specifically — do NOT touch P0/P1 criteria. If the correction is about minimum/maximum experience, tenure, or dates, see the DATE/EXPERIENCE CORRECTIONS rule below — it goes to a different, more specific section than a general hard requirement.
 
 When HR provides a description (reject_reason), treat it as the root cause and translate it into a concrete prompt change — a new bullet point, a reworded threshold, or a new signal to look for.
 Example: HR says "lacks impact metrics" and targets P1 → add to P0: "Must show measurable impact (quantified outcomes, scale of work, business results) — impressive-sounding roles without evidence of impact do not qualify for P0."
-Example: HR targets Baseline and says "we should accept 1 year experience, not 2" → update the hard-requirements section to reflect the corrected minimum.
+Example: HR targets Baseline and says "we should accept 1 year experience, not 2" → update the High-Priority Hard Criteria section to reflect the corrected minimum (see DATE/EXPERIENCE CORRECTIONS rule below).
+
+DATE/EXPERIENCE CORRECTIONS — ALWAYS ROUTE TO HIGH-PRIORITY HARD CRITERIA:
+Any correction about minimum experience, maximum experience, tenure, seniority-by-years, fresher/internship exceptions, or any other date/duration-based threshold belongs EXCLUSIVELY in ------HIGH-PRIORITY HARD CRITERIA------ — never in Hard Requirements, Red Flags, or anywhere else, regardless of what hr_target says. If the prompt you're editing already has this section, edit the corrected threshold there. If any date/experience fact for the same criterion exists elsewhere in the prompt (Hard Requirements, Red Flags — including an OVERQUALIFICATION subsection — or a legacy "Full-Time Experience Bar" section from an older prompt version), you MUST DELETE it from that old location entirely as part of this same edit. Updating its number to match is NOT sufficient and is WRONG — a correct fact sitting in two places is still a duplicate that will drift out of sync on the next edit. There must be exactly one line, in exactly one section, stating this fact anywhere in the whole prompt when you are done.
+If the prompt you're editing does NOT have a ------HIGH-PRIORITY HARD CRITERIA------ section yet (an older prompt generated before this section existed), this is the ONE exception to "never invent new section headers": create it as its own section positioned immediately BEFORE ------HARD REQUIREMENTS------ in the output — not appended at the end, not placed after Hard Requirements or Red Flags. Move every existing date/experience-duration fact you find anywhere else in the prompt into it, deleting each one from its old location. Do not create this section for any correction that isn't about a date/experience/tenure fact.
 
 CONTRADICTION RESOLUTION — HIGHEST PRIORITY, READ BEFORE EDITING:
 What HR typed is the new ground truth for the specific criterion it addresses. It OVERRIDES whatever the prompt currently says about that criterion — it does not sit alongside it.
 
-IMPORTANT: hr_target is the rating HR believes is correct — it is NOT automatically the section you edit. Find whichever section — Hard Requirements, P0 criteria, P1 criteria, or Red Flags — actually contains the line responsible for the AI's original decision and that HR's correction contradicts. This is often NOT the section matching hr_target: e.g. if the AI said Reject because a Hard Requirement wasn't met, and HR says the correct outcome is P1, the fix usually belongs in Hard Requirements (loosen the specific requirement that caused the reject) — not in the P1 criteria section.
+IMPORTANT: hr_target is the rating HR believes is correct — it is NOT automatically the section you edit. Find whichever section — High-Priority Hard Criteria, Hard Requirements, P0 criteria, P1 criteria, or Red Flags — actually contains the line responsible for the AI's original decision and that HR's correction contradicts. This is often NOT the section matching hr_target: e.g. if the AI said Reject because a Hard Requirement wasn't met, and HR says the correct outcome is P1, the fix usually belongs in Hard Requirements (loosen the specific requirement that caused the reject) — not in the P1 criteria section. If the AI's decision traces back to a date/experience/tenure threshold, the fix belongs in High-Priority Hard Criteria specifically — see DATE/EXPERIENCE CORRECTIONS below.
 
 WHEN HR'S DESCRIPTION CONTAINS "X, NOT Y" OR "NOW X, PREVIOUSLY Y" PHRASING:
 The value immediately after "not" / "previously" is the OLD value being corrected away from — never write it into the prompt. The other value is the corrected one. Read the full sentence carefully before editing; do not default to whichever number or value appears first or last in the sentence.
@@ -127,20 +131,58 @@ Before you write anything:
 6. NEVER let two lines anywhere in the prompt state conflicting bars for the same underlying criterion. A downstream model reading both will apply them inconsistently across candidates. Every contradiction must be resolved by replacing the old line(s) — never by stacking a new one on top of it.
 
 NEVER INVENT NEW SECTION HEADERS — CRITICAL STRUCTURAL RULE:
-The evaluator prompt you are editing uses ONLY these section headers, and you may use ONLY these — never any other: ------ROLE CONTEXT------, ------COMPRESSOR INSTRUCTIONS------, ------EVALUATOR INSTRUCTIONS------, ------HARD REQUIREMENTS------, ------FULL-TIME EXPERIENCE BAR------, ------SIGNAL QUALITY------, ------P0 CRITERIA — EXCEPTIONAL------, ------P1 CRITERIA — INTERVIEW WORTHY------, ------RED FLAGS------, ------SCORING RUBRIC------, ------EVALUATION OUTPUT FORMAT------.
+The evaluator prompt you are editing uses ONLY these section headers, and you may use ONLY these — never any other: ------ROLE CONTEXT------, ------COMPRESSOR INSTRUCTIONS------, ------EVALUATOR INSTRUCTIONS------, ------HIGH-PRIORITY HARD CRITERIA------, ------HARD REQUIREMENTS------, ------SIGNAL QUALITY------, ------P0 CRITERIA — EXCEPTIONAL------, ------P1 CRITERIA — INTERVIEW WORTHY------, ------RED FLAGS------, ------SCORING RUBRIC------, ------EVALUATION OUTPUT FORMAT------.
 Every edit you make must be merged directly into whichever of these headers already exists in the input prompt — as an edited or added line within that section's existing numbered/bulleted list. Do NOT create headers like "------ADDED REJECTION TRIGGER FOR X------", "------UPDATED HARD REQUIREMENT N------", "------NEW CRITERION------", or any other header that describes what you changed. A header like that is a changelog entry, not part of a hiring rubric — no downstream system recognizes it, it will never be read correctly again, and it duplicates whatever content already exists in the real section.
+The ONE exception is ------HIGH-PRIORITY HARD CRITERIA------ itself: if a date/experience/tenure correction needs it and the prompt you're editing doesn't have it yet (an older prompt from before this section existed), you may create it — see DATE/EXPERIENCE CORRECTIONS above for exactly how. No other new header may ever be created.
 Return the COMPLETE evaluator prompt with your edits woven invisibly into their correct existing sections. The output must read exactly like a prompt that was written this way from scratch — never like a diff, changelog, or a list of "added/updated" fragments layered on top.
 
 Rules:
 - Look for patterns across multiple disagreements rather than reacting to each in isolation
-- Do NOT change the overall structure of the prompt, but add or reword criteria where needed
+- Do NOT change the overall structure of the prompt, but add or reword criteria where needed. The ONE exception is the High-Priority Hard Criteria consolidation described above — creating that section when missing, and deleting duplicate date/experience facts from other sections, is required structural change, not optional.
 - Do NOT change the output format (rating, score, reasoning, reject_reason, concerns must all stay)
 - Focus on the actual work done and descriptions, not just job titles or company names
 - Changes must be targeted and minimal — do not rewrite sections that are working
 - When a contradiction exists between existing wording and HR's correction, resolving it takes priority over "minimal changes" — replace every conflicting line, wherever it appears, even if that means touching more text than usual
+- A duplicate date/experience/tenure fact must be DELETED from its old location even after you've updated its number to match the new value elsewhere. Two lines stating the SAME (now-consistent) number are still a duplicate, not a resolved contradiction — "minimal changes" and "sections that are working" do NOT protect a duplicate like this from deletion. Consolidation to exactly one location is mandatory regardless of whether the numbers currently agree.
 
 Return ONLY valid JSON with a single key "evaluator_prompt" containing the revised prompt string.
 No markdown. No explanation.`;
+
+// Deterministic safety net for the recalibration model's known blind spot: it reliably
+// updates a duplicated date/experience fact's NUMBER to match a correction, but leaves
+// the duplicate line itself sitting in Red Flags' OVERQUALIFICATION subsection instead of
+// deleting it, and appends the High-Priority Hard Criteria section wherever is convenient
+// instead of positioning it before Hard Requirements. Prose instructions alone didn't fix
+// this reliably across repeated attempts, so we enforce it in code instead.
+function enforceHighPriorityHardCriteria(prompt: string): string {
+  const HP_MARKER = "------HIGH-PRIORITY HARD CRITERIA------";
+  const HR_MARKER = "------HARD REQUIREMENTS------";
+
+  const hpIdx = prompt.indexOf(HP_MARKER);
+  if (hpIdx === -1) return prompt; // section doesn't exist — nothing to enforce
+
+  // Extract the full High-Priority Hard Criteria block (up to the next section marker).
+  const nextMarkerIdx = prompt.indexOf("------", hpIdx + HP_MARKER.length);
+  const hpBlockEnd = nextMarkerIdx === -1 ? prompt.length : nextMarkerIdx;
+  const hpBlock = prompt.slice(hpIdx, hpBlockEnd).trim();
+
+  // Remove it from wherever the model put it.
+  let rest = prompt.slice(0, hpIdx) + prompt.slice(hpBlockEnd);
+
+  // That fact now lives exclusively in High-Priority Hard Criteria — strip any leftover
+  // OVERQUALIFICATION subsection out of Red Flags, since it can only ever be a duplicate.
+  rest = rest.replace(/OVERQUALIFICATION:\s*\n(?:[-•][^\n]*\n?)+/gi, "");
+
+  // Clean up any section left completely empty by that removal (e.g. Red Flags with
+  // nothing left but OVERQUALIFICATION) — a bare dangling header helps no one.
+  rest = rest.replace(/------[^\n]+------\s*\n+(?=------)/g, "");
+
+  // Re-insert immediately before Hard Requirements, exactly where it belongs.
+  const hrIdx = rest.indexOf(HR_MARKER);
+  if (hrIdx === -1) return prompt; // no Hard Requirements section found — bail out, leave prompt untouched rather than guess a position
+
+  return rest.slice(0, hrIdx) + hpBlock + "\n\n" + rest.slice(hrIdx);
+}
 
 const CONCURRENCY = 6;
 const TASTE_CHECK_CONCURRENCY = 10;
@@ -717,7 +759,7 @@ router.post("/recalibrate-prompt", async (req: Request, res: Response) => {
       if (!parsed.evaluator_prompt) {
         return res.status(500).json({ error: "Model did not return an evaluator_prompt", raw_response: raw });
       }
-      return res.json({ new_evaluator_prompt: parsed.evaluator_prompt });
+      return res.json({ new_evaluator_prompt: enforceHighPriorityHardCriteria(parsed.evaluator_prompt) });
     } catch {
       return res.status(500).json({ error: "Failed to parse recalibration response", raw_response: raw });
     }
