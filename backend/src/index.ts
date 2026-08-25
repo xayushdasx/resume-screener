@@ -14,6 +14,10 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Render sits behind a reverse proxy that sets X-Forwarded-For; trust exactly
+// one hop so express-rate-limit can read the real client IP safely.
+app.set("trust proxy", 1);
+
 // ── Security headers ────────────────────────────────────────────────────────
 app.use(helmet());
 
